@@ -143,9 +143,6 @@ func rootEndsHere(s string, end int) bool {
 	return c == '/' || c == '\\' || isBoundary(c)
 }
 
-/* Contains reports whether token appears literally anywhere in jsonl. */
-func Contains(jsonl, token []byte) bool { return bytes.Contains(jsonl, token) }
-
 /*
 Materialize replaces every occurrence of token inside jsonl's decoded JSON
 string values with targetRoot, converting the following path tail's '/'

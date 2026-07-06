@@ -37,7 +37,6 @@ type Report struct {
 	ProjectID string
 	Sessions  int
 	Sequence  int
-	Note      string
 }
 
 /* statePath returns the path to projectID's local state file. */
