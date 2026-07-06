@@ -152,7 +152,10 @@ func loadDeps(project string) (syncer.Deps, error) {
 func cmdSync(args []string, op string) error {
 	fs := flag.NewFlagSet(op, flag.ExitOnError)
 	project := fs.String("project", "", "project ID")
-	force := fs.Bool("force", false, "override stale-pull / divergence warnings")
+	var force *bool
+	if op == "pull" {
+		force = fs.Bool("force", false, "override stale-pull / divergence warnings")
+	}
 	fs.Parse(args)
 	if *project == "" {
 		return errors.New(op + " requires -project")
