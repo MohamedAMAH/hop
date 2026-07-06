@@ -6,7 +6,10 @@ is entirely external; this package only reads and writes files.
 package folder
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,32 +25,87 @@ type Folder struct{ dir string }
 /* New returns a Folder transport rooted at dir. */
 func New(dir string) *Folder { return &Folder{dir: dir} }
 
+/*
+manifestEntry records the identity and expected contents of one session
+file, so Receive can detect a partial or stale bundle before trusting it.
+*/
+type manifestEntry struct {
+	ID    string `json:"id"`
+	Hash  string `json:"hash"`
+	Bytes int64  `json:"bytes"`
+}
+
+/*
+diskMeta is the on-disk envelope written to meta.json. It carries the
+domain bundle.Meta plus a manifest of the session files that belong to it;
+the manifest never leaks into bundle.Meta itself.
+*/
+type diskMeta struct {
+	Meta     bundle.Meta     `json:"meta"`
+	Manifest []manifestEntry `json:"manifest"`
+}
+
 func (f *Folder) projectDir(projectID string) string {
 	return filepath.Join(f.dir, projectID)
 }
 
-/* Send writes meta.json plus one <id>.jsonl per session, each atomically. */
+/*
+Send writes one <id>.jsonl per session, prunes stale session files left
+over from an older push, then writes meta.json last as the commit marker.
+*/
 func (f *Folder) Send(b *bundle.Bundle) error {
 	pd := f.projectDir(b.Meta.ProjectID)
 	if err := os.MkdirAll(pd, 0o755); err != nil {
 		return err
 	}
-	metaBytes, err := json.MarshalIndent(b.Meta, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := writeAtomic(filepath.Join(pd, "meta.json"), metaBytes); err != nil {
-		return err
-	}
+	manifest := make([]manifestEntry, 0, len(b.Sessions))
+	kept := make(map[string]bool, len(b.Sessions))
 	for _, s := range b.Sessions {
 		if err := writeAtomic(filepath.Join(pd, s.ID+".jsonl"), s.Data); err != nil {
 			return err
 		}
+		sum := sha256.Sum256(s.Data)
+		manifest = append(manifest, manifestEntry{
+			ID:    s.ID,
+			Hash:  hex.EncodeToString(sum[:]),
+			Bytes: int64(len(s.Data)),
+		})
+		kept[s.ID] = true
 	}
-	return nil
+	// Best-effort prune of session files left over from an older push; Receive's manifest check is the real guarantee.
+	pruneStaleSessionFiles(pd, kept)
+	dm := diskMeta{Meta: b.Meta, Manifest: manifest}
+	metaBytes, err := json.MarshalIndent(dm, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(filepath.Join(pd, "meta.json"), metaBytes)
 }
 
-/* Receive reads the bundle for projectID, or transport.ErrNoBundle if absent. */
+/* pruneStaleSessionFiles removes *.jsonl files in dir whose ID is not in kept, ignoring any remove errors. */
+func pruneStaleSessionFiles(dir string, kept map[string]bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".jsonl")
+		if kept[id] {
+			continue
+		}
+		os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
+/*
+Receive reads the bundle for projectID, or transport.ErrNoBundle if absent.
+Every manifest entry is validated against the file on disk; a missing file
+or a byte-length/hash mismatch returns transport.ErrIncompleteBundle rather
+than a partial bundle.
+*/
 func (f *Folder) Receive(projectID string) (*bundle.Bundle, error) {
 	pd := f.projectDir(projectID)
 	metaBytes, err := os.ReadFile(filepath.Join(pd, "meta.json"))
@@ -57,29 +115,29 @@ func (f *Folder) Receive(projectID string) (*bundle.Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	var meta bundle.Meta
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+	var dm diskMeta
+	if err := json.Unmarshal(metaBytes, &dm); err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(pd)
-	if err != nil {
-		return nil, err
-	}
-	var sessions []agent.Session
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
+	sessions := make([]agent.Session, 0, len(dm.Manifest))
+	for _, entry := range dm.Manifest {
+		data, err := os.ReadFile(filepath.Join(pd, entry.ID+".jsonl"))
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: missing session %s", transport.ErrIncompleteBundle, entry.ID)
 		}
-		data, err := os.ReadFile(filepath.Join(pd, e.Name()))
 		if err != nil {
 			return nil, err
 		}
-		sessions = append(sessions, agent.Session{
-			ID:   strings.TrimSuffix(e.Name(), ".jsonl"),
-			Data: data,
-		})
+		if int64(len(data)) != entry.Bytes {
+			return nil, fmt.Errorf("%w: session %s length mismatch", transport.ErrIncompleteBundle, entry.ID)
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != entry.Hash {
+			return nil, fmt.Errorf("%w: session %s hash mismatch", transport.ErrIncompleteBundle, entry.ID)
+		}
+		sessions = append(sessions, agent.Session{ID: entry.ID, Data: data})
 	}
-	return &bundle.Bundle{Meta: meta, Sessions: sessions}, nil
+	return &bundle.Bundle{Meta: dm.Meta, Sessions: sessions}, nil
 }
 
 func writeAtomic(path string, data []byte) error {
