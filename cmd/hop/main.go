@@ -196,7 +196,7 @@ func cmdStatus(args []string) error {
 		p := cfg.Projects[*project]
 		fmt.Printf("project: %s\n  transport: %s\n  handoff: %s\n", *project, p.Transport, p.Handoff)
 		st, _ := state.Load(filepath.Join(stateDir, *project+".json"))
-		fmt.Printf("  last sequence: %d\n  baton held here: %v\n  last sync: %s\n",
+		fmt.Printf("  last sequence: %d\n  baton held locally: %v (not enforced across machines in Plan 1)\n  last sync: %s\n",
 			st.LastSyncedSequence, st.BatonHeld, st.LastSyncAt)
 	}
 	return nil

@@ -34,6 +34,11 @@ func TestDirty(t *testing.T) {
 	if !st.Dirty([]agent.Session{{ID: "a", Data: []byte("world")}}) {
 		t.Fatal("same-length different-content must be dirty")
 	}
+	// Deleted session: snapshot has {a, b}, current has only {a} unchanged.
+	stWithTwo := State{Sessions: snapshotOf([]agent.Session{{ID: "a", Data: []byte("hello")}, {ID: "b", Data: []byte("world")}})}
+	if !stWithTwo.Dirty([]agent.Session{{ID: "a", Data: []byte("hello")}}) {
+		t.Fatal("deleted session must be dirty")
+	}
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {

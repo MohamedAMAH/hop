@@ -38,10 +38,12 @@ func Snap(data []byte) SessionSnap {
 
 /*
 Dirty reports whether the current sessions differ from the snapshot: any new
-session, any differing length, or (at equal length) any differing hash.
+session, any differing length, any differing hash, or any deleted session.
 */
 func (s State) Dirty(sessions []agent.Session) bool {
+	currentIDs := make(map[string]bool)
 	for _, sess := range sessions {
+		currentIDs[sess.ID] = true
 		snap, ok := s.Sessions[sess.ID]
 		if !ok {
 			return true
@@ -50,6 +52,12 @@ func (s State) Dirty(sessions []agent.Session) bool {
 			return true
 		}
 		if snap.Hash != Snap(sess.Data).Hash {
+			return true
+		}
+	}
+	// Check for deleted sessions: snapshot IDs not in current set.
+	for snapID := range s.Sessions {
+		if !currentIDs[snapID] {
 			return true
 		}
 	}
