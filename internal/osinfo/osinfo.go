@@ -7,8 +7,8 @@ import "runtime"
 type OS int
 
 const (
-	Unix    OS = iota // '/' separators
-	Windows           // '\' separators
+	Unix    OS = iota // Unix uses forward-slash path separators.
+	Windows           // Windows uses backslash path separators.
 )
 
 /* Current reports the OS family of the machine hop is running on. */

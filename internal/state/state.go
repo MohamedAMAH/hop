@@ -1,5 +1,7 @@
-// Package state stores hop's machine-private per-project sync memory, used to
-// detect unpushed local work (the "dirty" check) and sequence divergence.
+/*
+Package state stores hop's machine-private per-project sync memory, used to
+detect unpushed local work (the "dirty" check) and sequence divergence.
+*/
 package state
 
 import (
@@ -12,13 +14,13 @@ import (
 	"hop/internal/agent"
 )
 
-// SessionSnap records one session's size and content hash at last sync.
+/* SessionSnap records one session's size and content hash at last sync. */
 type SessionSnap struct {
 	Bytes int64  `json:"bytes"`
 	Hash  string `json:"hash"`
 }
 
-// State is the local state file for a single project.
+/* State is the local state file for a single project. */
 type State struct {
 	ProjectID          string                 `json:"projectId"`
 	Machine            string                 `json:"machine"`
@@ -28,14 +30,16 @@ type State struct {
 	Sessions           map[string]SessionSnap `json:"sessions"`
 }
 
-// Snap computes the snapshot (length + sha256) of a session's bytes.
+/* Snap computes the snapshot (length + sha256) of a session's bytes. */
 func Snap(data []byte) SessionSnap {
 	sum := sha256.Sum256(data)
 	return SessionSnap{Bytes: int64(len(data)), Hash: fmt.Sprintf("sha256:%x", sum)}
 }
 
-// Dirty reports whether the current sessions differ from the snapshot: any new
-// session, any differing length, or (at equal length) any differing hash.
+/*
+Dirty reports whether the current sessions differ from the snapshot: any new
+session, any differing length, or (at equal length) any differing hash.
+*/
 func (s State) Dirty(sessions []agent.Session) bool {
 	for _, sess := range sessions {
 		snap, ok := s.Sessions[sess.ID]
@@ -52,8 +56,10 @@ func (s State) Dirty(sessions []agent.Session) bool {
 	return false
 }
 
-// Load reads the state file; a missing file yields a zero State with an
-// initialized Sessions map (not an error).
+/*
+Load reads the state file; a missing file yields a zero State with an
+initialized Sessions map (not an error).
+*/
 func Load(path string) (State, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -72,7 +78,7 @@ func Load(path string) (State, error) {
 	return s, nil
 }
 
-// Save writes the state file atomically (temp + rename).
+/* Save writes the state file atomically (temp + rename). */
 func (s State) Save(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

@@ -1,6 +1,8 @@
-// Package folder is a Transport backed by a local directory. Whatever keeps
-// that directory synced across machines (Syncthing, Dropbox, a network share)
-// is entirely external; this package only reads and writes files.
+/*
+Package folder is a Transport backed by a local directory. Whatever keeps
+that directory synced across machines (Syncthing, Dropbox, a network share)
+is entirely external; this package only reads and writes files.
+*/
 package folder
 
 import (

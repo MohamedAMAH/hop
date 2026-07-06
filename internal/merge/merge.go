@@ -1,6 +1,5 @@
 /*
-	Package merge decides how to reconcile a local and incoming transcript for
-
+Package merge decides how to reconcile a local and incoming transcript for
 one session, relying on transcripts being append-only.
 */
 package merge

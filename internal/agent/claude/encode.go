@@ -4,8 +4,7 @@ package claude
 import "strings"
 
 /*
-	EncodeDir converts an absolute project path into claude-code's project
-
+EncodeDir converts an absolute project path into claude-code's project
 directory name: every byte that is not [A-Za-z0-9] becomes '-'. Case and
 digits are preserved and consecutive dashes are NOT collapsed. The mapping
 is lossy and MUST NOT be inverted.
