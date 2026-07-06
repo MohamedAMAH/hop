@@ -67,7 +67,11 @@ func (c Claude) WriteSession(home, projectRoot string, s agent.Session) error {
 		os.Remove(tmpName)
 		return err
 	}
-	return os.Rename(tmpName, final)
+	if err := os.Rename(tmpName, final); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 var _ agent.Agent = Claude{}
