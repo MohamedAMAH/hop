@@ -28,3 +28,14 @@ func TestRewriteJSONStringsHandlesEscapedQuote(t *testing.T) {
 		t.Fatalf("identity transform changed bytes: got %s want %s", out, src)
 	}
 }
+
+func TestRewriteJSONStringsPreservesHTMLCharacters(t *testing.T) {
+	src := []byte(`{"cmd":"a && b < c > d"}`)
+	out, err := rewriteJSONStrings(src, func(s string) string { return s })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(src) {
+		t.Fatalf("identity transform changed bytes: got %s want %s", out, src)
+	}
+}

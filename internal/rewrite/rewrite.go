@@ -1,22 +1,21 @@
 /*
-	Package rewrite neutralizes and materializes machine-specific paths inside
-
+Package rewrite neutralizes and materializes machine-specific paths inside
 claude-code JSONL transcripts, operating on decoded JSON string values so
 escaping and structure are preserved exactly.
 */
 package rewrite
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
 
 /*
-	rewriteJSONStrings scans src for JSON string literals, decodes each, applies
-
-fn to the decoded value, and re-encodes it. All bytes outside string
-literals are copied verbatim, so key order, whitespace, numbers, and the
-newlines between JSONL records are preserved.
+rewriteJSONStrings scans src for JSON string literals, decodes each, applies
+fn to the decoded value, and re-encodes it without HTML-escaping. All bytes
+outside string literals are copied verbatim, so key order, whitespace,
+numbers, and the newlines between JSONL records are preserved.
 */
 func rewriteJSONStrings(src []byte, fn func(string) string) ([]byte, error) {
 	var out strings.Builder
@@ -51,11 +50,13 @@ func rewriteJSONStrings(src []byte, fn func(string) string) ([]byte, error) {
 		if err := json.Unmarshal(literal, &decoded); err != nil {
 			return nil, err
 		}
-		reencoded, err := json.Marshal(fn(decoded))
-		if err != nil {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(fn(decoded)); err != nil {
 			return nil, err
 		}
-		out.Write(reencoded)
+		out.Write(bytes.TrimRight(buf.Bytes(), "\n"))
 		i = j + 1
 	}
 	return []byte(out.String()), nil
