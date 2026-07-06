@@ -103,3 +103,32 @@ func TestFolderReceiveReturnsErrIncompleteBundleWhenSessionFileCorrupted(t *test
 		t.Fatalf("corrupted session file must return ErrIncompleteBundle, got %v", err)
 	}
 }
+
+func TestFolderReceiveReturnsErrIncompleteBundleWhenSessionFileHashMismatch(t *testing.T) {
+	// This test ensures the hash-check branch is covered by tampering with
+	// a file that has the same byte length but different content, so the
+	// length check passes but the sha256 check fails.
+	dir := t.TempDir()
+	f := New(dir)
+	originalData := []byte(`{"type":"user"}` + "\n")
+	b := &bundle.Bundle{
+		Meta:     bundle.Meta{ProjectID: "hop", Token: bundle.DefaultToken, Baton: bundle.Baton{Owner: "win", Sequence: 1}},
+		Sessions: []agent.Session{{ID: "abc", Data: originalData}},
+	}
+	if err := f.Send(b); err != nil {
+		t.Fatal(err)
+	}
+	// Build a same-length replacement by creating identical-length bytes.
+	// Original is {"type":"user"}\n (16 bytes); use {"type":"admin"}\n (also 16 bytes).
+	sameLengthTamper := make([]byte, len(originalData))
+	copy(sameLengthTamper, []byte(`{"type":"admin"}`+"\n"))
+	if len(sameLengthTamper) != len(originalData) {
+		t.Fatalf("tamper length mismatch: %d != %d", len(sameLengthTamper), len(originalData))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hop", "abc.jsonl"), sameLengthTamper, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Receive("hop"); !errors.Is(err, transport.ErrIncompleteBundle) {
+		t.Fatalf("hash mismatch must return ErrIncompleteBundle, got %v", err)
+	}
+}

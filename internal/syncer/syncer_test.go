@@ -156,4 +156,22 @@ func TestForcedPullBacksUpDivergedSession(t *testing.T) {
 	if string(backupBytes) != localData {
 		t.Fatalf("backup bytes = %q, want %q", backupBytes, localData)
 	}
+
+	// Assert that the live session was overwritten with the incoming (materialized) content.
+	got, err := claude.New().ListSessions(cons.Home, consRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 session after forced pull, got %d", len(got))
+	}
+	// The materialized incoming content should have the consumer's root, not the producer's.
+	consCwd, err := json.Marshal(consRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedData := `{"cwd":` + string(consCwd) + `,"x":1}` + "\n"
+	if string(got[0].Data) != expectedData {
+		t.Fatalf("overwritten session data mismatch:\n got  %q\n want %q", got[0].Data, expectedData)
+	}
 }
