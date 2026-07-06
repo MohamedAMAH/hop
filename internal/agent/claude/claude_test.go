@@ -37,3 +37,52 @@ func TestWriteThenListRoundTrips(t *testing.T) {
 		t.Fatalf("expected session file: %v", err)
 	}
 }
+
+func TestBackupSessionMissingReturnsEmpty(t *testing.T) {
+	home := t.TempDir()
+	root := `/proj/x`
+	c := New()
+	path, err := c.BackupSession(home, root, "nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "" {
+		t.Fatalf("BackupSession path = %q, want empty", path)
+	}
+}
+
+func TestBackupSessionCopiesExistingBytes(t *testing.T) {
+	home := t.TempDir()
+	root := `/proj/x`
+	c := New()
+	in := []byte(`{"type":"user"}` + "\n")
+	if err := c.WriteSession(home, root, agent.Session{ID: "abc", Data: in}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := c.BackupSession(home, root, "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path == "" {
+		t.Fatal("BackupSession path = \"\", want a backup path")
+	}
+	backupDir := filepath.Join(c.ProjectDir(home, root), ".hop-backups")
+	if filepath.Dir(path) != backupDir {
+		t.Fatalf("backup path %q not under %q", path, backupDir)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(in) {
+		t.Fatalf("backup bytes = %q, want %q", got, in)
+	}
+	// Confirm the backup directory is not seen as a session by ListSessions.
+	sessions, err := c.ListSessions(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "abc" {
+		t.Fatalf("ListSessions should only see the real session, got %+v", sessions)
+	}
+}

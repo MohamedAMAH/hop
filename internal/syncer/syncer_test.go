@@ -2,6 +2,8 @@ package syncer
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"hop/internal/agent"
@@ -105,5 +107,53 @@ func TestPullMaterializesNewSession(t *testing.T) {
 	want := `{"cwd":` + string(consCwd) + `,"x":1}` + "\n"
 	if len(got) != 1 || string(got[0].Data) != want {
 		t.Fatalf("materialize mismatch:\n got  %q\n want %q", got[0].Data, want)
+	}
+}
+
+func TestForcedPullBacksUpDivergedSession(t *testing.T) {
+	// Producer machine "win" pushes; consumer "nix" has an independently
+	// diverged local copy of the same session ID.
+	prod, prodRoot := baseDeps(t)
+	prodCwd, err := json.Marshal(prodRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, claude.New(), prod.Home, prodRoot, "s1",
+		`{"cwd":`+string(prodCwd)+`,"x":1}`+"\n")
+	if _, err := Push(prod, "hop", "2026-07-06T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	consHome := t.TempDir()
+	consRoot := consHome + "/elsewhere/hop"
+	cons := Deps{
+		Cfg: config.Config{Machine: "nix", Projects: map[string]config.Project{
+			"hop": {Paths: map[string]string{"nix": consRoot}, Transport: "folder"}}},
+		Agent: claude.New(), Transport: prod.Transport,
+		Home: consHome, StateDir: t.TempDir(), OS: osinfo.Unix,
+	}
+	// Local content that shares neither a prefix nor a suffix relationship
+	// with the incoming bytes, forcing merge.Diverged.
+	localData := `{"cwd":"/local/only","y":999}` + "\n"
+	writeSession(t, claude.New(), cons.Home, consRoot, "s1", localData)
+
+	if _, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", true); err != nil {
+		t.Fatal(err)
+	}
+
+	backupDir := filepath.Join(claude.New().ProjectDir(consHome, consRoot), ".hop-backups")
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatalf("expected backup dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 backup file, got %d", len(entries))
+	}
+	backupBytes, err := os.ReadFile(filepath.Join(backupDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backupBytes) != localData {
+		t.Fatalf("backup bytes = %q, want %q", backupBytes, localData)
 	}
 }

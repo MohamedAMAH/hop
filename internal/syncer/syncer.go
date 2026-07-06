@@ -185,6 +185,10 @@ func Pull(d Deps, projectID, now string, force bool) (Report, error) {
 			if !force {
 				return Report{}, fmt.Errorf("%w: session %s", ErrDiverged, in.ID)
 			}
+			// Preserve the discarded local divergence before overwriting it.
+			if _, err := d.Agent.BackupSession(d.Home, root, in.ID); err != nil {
+				return Report{}, err
+			}
 			if err := d.Agent.WriteSession(d.Home, root, agent.Session{ID: in.ID, Data: materialized}); err != nil {
 				return Report{}, err
 			}

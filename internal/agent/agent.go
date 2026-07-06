@@ -12,4 +12,7 @@ type Agent interface {
 	ProjectDir(home, projectRoot string) string
 	ListSessions(home, projectRoot string) ([]Session, error)
 	WriteSession(home, projectRoot string, s Session) error
+	/* BackupSession copies the current on-disk session to a sibling backup and
+	returns the backup path, or an empty string when the session does not exist. */
+	BackupSession(home, projectRoot, id string) (string, error)
 }

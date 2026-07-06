@@ -1,9 +1,11 @@
 package claude
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"hop/internal/agent"
 )
@@ -72,6 +74,44 @@ func (c Claude) WriteSession(home, projectRoot string, s agent.Session) error {
 		return err
 	}
 	return nil
+}
+
+/* BackupSession copies the on-disk session id into a timestamped file under .hop-backups and returns its path, or ("", nil) when the session does not exist; .hop-backups is a subdirectory so ListSessions never sees it. */
+func (c Claude) BackupSession(home, projectRoot, id string) (string, error) {
+	dir := c.ProjectDir(home, projectRoot)
+	src := filepath.Join(dir, id+".jsonl")
+	data, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	backupDir := filepath.Join(dir, ".hop-backups")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return "", err
+	}
+	final := filepath.Join(backupDir, fmt.Sprintf("%s.%d.jsonl", id, time.Now().UnixNano()))
+	tmp, err := os.CreateTemp(backupDir, id+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		// Clean up the partially written temp file before returning.
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := os.Rename(tmpName, final); err != nil {
+		os.Remove(tmpName)
+		return "", err
+	}
+	return final, nil
 }
 
 var _ agent.Agent = Claude{}
