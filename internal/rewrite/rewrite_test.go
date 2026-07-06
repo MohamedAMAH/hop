@@ -82,3 +82,30 @@ func TestNeutralizeDoesNotMatchLongerSiblingPathSegment(t *testing.T) {
 		t.Fatalf("got  %s\nwant %s", out, want)
 	}
 }
+
+func TestMaterializeToUnix(t *testing.T) {
+	src := []byte(`{"cwd":"__HOP_ROOT__","msg":"__HOP_ROOT__/src/main.go"}`)
+	out, err := Materialize(src, "/home/abdel/hop", osinfo.Unix, "__HOP_ROOT__")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"cwd":"/home/abdel/hop","msg":"/home/abdel/hop/src/main.go"}`
+	if string(out) != want {
+		t.Fatalf("got  %s\nwant %s", out, want)
+	}
+}
+
+func TestRoundTripSameMachine(t *testing.T) {
+	orig := []byte(`{"cwd":"D:\\Fun\\hop","msg":"at D:\\Fun\\hop\\a b\\x.go"}`)
+	neutral, err := Neutralize(orig, `D:\Fun\hop`, osinfo.Windows, "__HOP_ROOT__")
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Materialize(neutral, `D:\Fun\hop`, osinfo.Windows, "__HOP_ROOT__")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(back) != string(orig) {
+		t.Fatalf("round-trip changed bytes:\n got  %s\n want %s", back, orig)
+	}
+}

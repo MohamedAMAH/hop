@@ -145,3 +145,35 @@ func rootEndsHere(s string, end int) bool {
 
 /* Contains reports whether token appears literally anywhere in jsonl. */
 func Contains(jsonl, token []byte) bool { return bytes.Contains(jsonl, token) }
+
+/*
+Materialize replaces every occurrence of token inside jsonl's decoded JSON
+string values with targetRoot, converting the following path tail's '/'
+separators to targetOS's separator.
+*/
+func Materialize(jsonl []byte, targetRoot string, targetOS osinfo.OS, token string) ([]byte, error) {
+	sep := targetOS.Sep()
+	return rewriteJSONStrings(jsonl, func(s string) string {
+		var b strings.Builder
+		i := 0
+		for i < len(s) {
+			if strings.HasPrefix(s[i:], token) {
+				b.WriteString(targetRoot)
+				i += len(token)
+				// Convert the contiguous path tail's separators to the target OS's separator.
+				for i < len(s) && isPathTail(s[i]) {
+					if s[i] == '/' {
+						b.WriteString(sep)
+					} else {
+						b.WriteByte(s[i])
+					}
+					i++
+				}
+				continue
+			}
+			b.WriteByte(s[i])
+			i++
+		}
+		return b.String()
+	})
+}
