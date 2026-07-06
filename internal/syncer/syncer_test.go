@@ -62,3 +62,48 @@ func TestPushNeutralizesAndBumpsSequence(t *testing.T) {
 		t.Fatalf("baton not released/bumped: %+v", got.Meta.Baton)
 	}
 }
+
+func TestPullMaterializesNewSession(t *testing.T) {
+	// Producer machine "win" pushes; consumer "nix" pulls to a different root.
+	prod, prodRoot := baseDeps(t)
+	prodCwd, err := json.Marshal(prodRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, claude.New(), prod.Home, prodRoot, "s1",
+		`{"cwd":`+string(prodCwd)+`,"x":1}`+"\n")
+	if _, err := Push(prod, "hop", "2026-07-06T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Consumer shares the SAME transport but a different home/root/machine.
+	consHome := t.TempDir()
+	consRoot := consHome + "/elsewhere/hop"
+	cons := Deps{
+		Cfg: config.Config{Machine: "nix", Projects: map[string]config.Project{
+			"hop": {Paths: map[string]string{"nix": consRoot}, Transport: "folder"}}},
+		Agent: claude.New(), Transport: prod.Transport,
+		Home: consHome, StateDir: t.TempDir(), OS: osinfo.Unix,
+	}
+
+	rep, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Sessions != 1 {
+		t.Fatalf("expected 1 session, got %+v", rep)
+	}
+	got, err := claude.New().ListSessions(consHome, consRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// cwd must be rewritten to the consumer's root.
+	consCwd, err := json.Marshal(consRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"cwd":` + string(consCwd) + `,"x":1}` + "\n"
+	if len(got) != 1 || string(got[0].Data) != want {
+		t.Fatalf("materialize mismatch:\n got  %q\n want %q", got[0].Data, want)
+	}
+}
