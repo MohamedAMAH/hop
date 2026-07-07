@@ -15,23 +15,28 @@ import (
 	"hop/internal/syncer"
 	"hop/internal/transport"
 	"hop/internal/transport/folder"
+	"hop/internal/ui"
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	args, plain := extractPlainFlag(os.Args[1:])
+	interactive := ui.Interactive(plain)
+	if len(args) < 1 {
 		usage()
 		os.Exit(2)
 	}
 	var err error
-	switch os.Args[1] {
+	switch args[0] {
 	case "init":
-		err = cmdInit(os.Args[2:])
+		err = cmdInit(args[1:], interactive)
 	case "push":
-		err = cmdSync(os.Args[2:], "push")
+		err = cmdSync(args[1:], "push", interactive)
 	case "pull":
-		err = cmdSync(os.Args[2:], "pull")
+		err = cmdSync(args[1:], "pull", interactive)
 	case "status":
-		err = cmdStatus(os.Args[2:])
+		err = cmdStatus(args[1:], interactive)
+	case "config":
+		err = cmdConfig(args[1:], interactive)
 	default:
 		usage()
 		os.Exit(2)
@@ -42,9 +47,27 @@ func main() {
 	}
 }
 
+/*
+extractPlainFlag removes a -plain/--plain flag from args, wherever it appears,
+and reports whether it was present. The global flag is scanned ahead of
+subcommand dispatch, so each subcommand's flag.FlagSet never sees it.
+*/
+func extractPlainFlag(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	plain := false
+	for _, a := range args {
+		if a == "-plain" || a == "--plain" {
+			plain = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, plain
+}
+
 /* usage prints the top-level command summary to stderr. */
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hop <init|push|pull|status> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: hop [--plain] <init|push|pull|status|config> [flags]")
 }
 
 /* paths returns hop's config file path, state directory, and the user's home directory. */
@@ -60,8 +83,12 @@ func paths() (cfgPath, stateDir, home string, err error) {
 	return filepath.Join(dir, "config.json"), filepath.Join(dir, "state"), home, nil
 }
 
-/* cmdInit records this machine's path and transport settings for a project. */
-func cmdInit(args []string) error {
+/*
+cmdInit records this machine's path and transport settings for a project. When
+required flags are missing and the terminal is interactive, it seeds a guided
+form with whatever flags were given instead of failing.
+*/
+func cmdInit(args []string, interactive bool) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	project := fs.String("project", "", "project ID")
 	machine := fs.String("machine", "", "this machine's name")
@@ -70,10 +97,31 @@ func cmdInit(args []string) error {
 	folderDir := fs.String("folder", "", "folder transport: the shared directory")
 	handoff := fs.String("handoff", "manual", "hand-off mode (manual)")
 	fs.Parse(args)
-	if *project == "" || *machine == "" || *path == "" {
+
+	missing := *project == "" || *machine == "" || *path == ""
+	if missing && !interactive {
 		return errors.New("init requires -project, -machine, and -path")
 	}
-	if *tport == "folder" && *folderDir == "" {
+
+	values := ui.InitValues{
+		ProjectID: *project,
+		Machine:   *machine,
+		Path:      *path,
+		Transport: *tport,
+		Folder:    *folderDir,
+		Handoff:   *handoff,
+	}
+	if missing {
+		var err error
+		values, err = ui.RunInitForm(values)
+		if err != nil {
+			return err
+		}
+	}
+	if values.ProjectID == "" || values.Machine == "" || values.Path == "" {
+		return errors.New("init requires -project, -machine, and -path")
+	}
+	if values.Transport == "folder" && values.Folder == "" {
 		return errors.New("folder transport requires -folder")
 	}
 
@@ -85,28 +133,30 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.Machine = *machine
-	p, ok := cfg.Projects[*project]
+	cfg.Machine = values.Machine
+	existing, ok := cfg.Projects[values.ProjectID]
 	if !ok {
-		p = config.Project{Paths: map[string]string{}, TransportConfig: map[string]string{}}
+		existing = config.Project{Paths: map[string]string{}, TransportConfig: map[string]string{}}
 	}
+	updates := map[string]string{"transport": values.Transport, "handoff": values.Handoff}
+	if values.Transport == "folder" {
+		updates["folder"] = values.Folder
+	}
+	p := existing.WithUpdates(updates)
 	if p.Paths == nil {
 		p.Paths = map[string]string{}
 	}
-	if p.TransportConfig == nil {
-		p.TransportConfig = map[string]string{}
-	}
-	p.Paths[*machine] = *path
-	p.Transport = *tport
-	p.Handoff = *handoff
-	if *tport == "folder" {
-		p.TransportConfig["dir"] = *folderDir
-	}
-	cfg.Projects[*project] = p
+	p.Paths[values.Machine] = values.Path
+	cfg.Projects[values.ProjectID] = p
 	if err := cfg.Save(cfgPath); err != nil {
 		return err
 	}
-	fmt.Printf("Configured project %q on machine %q at %s\n", *project, *machine, *path)
+	msg := fmt.Sprintf("Configured project %q on machine %q at %s", values.ProjectID, values.Machine, values.Path)
+	if interactive {
+		fmt.Println(ui.RenderMessage("ok", msg))
+	} else {
+		fmt.Println(msg)
+	}
 	return nil
 }
 
@@ -149,7 +199,7 @@ func loadDeps(project string) (syncer.Deps, error) {
 }
 
 /* cmdSync runs a push or pull for a project and prints its report. */
-func cmdSync(args []string, op string) error {
+func cmdSync(args []string, op string, interactive bool) error {
 	fs := flag.NewFlagSet(op, flag.ExitOnError)
 	project := fs.String("project", "", "project ID")
 	var force *bool
@@ -164,6 +214,11 @@ func cmdSync(args []string, op string) error {
 	if err != nil {
 		return err
 	}
+	if interactive {
+		d.Notify = func(m string) { fmt.Println(ui.RenderMessage("note", m)) }
+	} else {
+		d.Notify = func(m string) { fmt.Fprintln(os.Stderr, "note: "+m) }
+	}
 	now := nowRFC3339()
 	var rep syncer.Report
 	if op == "push" {
@@ -172,18 +227,24 @@ func cmdSync(args []string, op string) error {
 		var r syncer.Resolver = syncer.AbortResolver{}
 		if *force {
 			r = syncer.ForceResolver{}
+		} else if interactive {
+			r = ui.UIResolver{}
 		}
 		rep, err = syncer.Pull(d, *project, now, r)
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s ok: %d session(s), sequence %d\n", op, rep.Sessions, rep.Sequence)
+	if interactive {
+		fmt.Println(ui.RenderSync(op, rep.Sessions, rep.Sequence))
+	} else {
+		fmt.Printf("%s ok: %d session(s), sequence %d\n", op, rep.Sessions, rep.Sequence)
+	}
 	return nil
 }
 
 /* cmdStatus prints this machine's configuration and, if given a project, its sync state. */
-func cmdStatus(args []string) error {
+func cmdStatus(args []string, interactive bool) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	project := fs.String("project", "", "project ID")
 	fs.Parse(args)
@@ -195,13 +256,114 @@ func cmdStatus(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("machine: %s\n", cfg.Machine)
+	if !interactive {
+		fmt.Printf("machine: %s\n", cfg.Machine)
+		if *project != "" {
+			p := cfg.Projects[*project]
+			fmt.Printf("project: %s\n  transport: %s\n  handoff: %s\n", *project, p.Transport, p.Handoff)
+			st, _ := state.Load(filepath.Join(stateDir, *project+".json"))
+			fmt.Printf("  last sequence: %d\n  baton held locally: %v (not enforced across machines in Plan 1)\n  last sync: %s\n",
+				st.LastSyncedSequence, st.BatonHeld, st.LastSyncAt)
+		}
+		return nil
+	}
+	var p config.Project
+	var st state.State
 	if *project != "" {
-		p := cfg.Projects[*project]
-		fmt.Printf("project: %s\n  transport: %s\n  handoff: %s\n", *project, p.Transport, p.Handoff)
-		st, _ := state.Load(filepath.Join(stateDir, *project+".json"))
-		fmt.Printf("  last sequence: %d\n  baton held locally: %v (not enforced across machines in Plan 1)\n  last sync: %s\n",
-			st.LastSyncedSequence, st.BatonHeld, st.LastSyncAt)
+		p = cfg.Projects[*project]
+		st, _ = state.Load(filepath.Join(stateDir, *project+".json"))
+	}
+	fmt.Println(ui.RenderStatus(cfg.Machine, *project, p.Transport, p.Handoff, st.LastSyncedSequence, st.BatonHeld, st.LastSyncAt))
+	return nil
+}
+
+/*
+cmdConfig edits an already-configured project's settings. Unlike init, it
+always starts from the existing project entry and applies only the fields
+the flags or form actually changed, so unrelated settings are never wiped.
+*/
+func cmdConfig(args []string, interactive bool) error {
+	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	project := fs.String("project", "", "project ID")
+	machine := fs.String("machine", "", "this machine's name")
+	path := fs.String("path", "", "absolute project path on this machine")
+	tport := fs.String("transport", "", "transport (folder)")
+	folderDir := fs.String("folder", "", "folder transport: the shared directory")
+	handoff := fs.String("handoff", "", "hand-off mode (manual)")
+	fs.Parse(args)
+	if *project == "" {
+		return errors.New("config requires -project")
+	}
+
+	cfgPath, _, _, err := paths()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	existing, ok := cfg.Projects[*project]
+	if !ok {
+		return fmt.Errorf("project %q is not configured; run `hop init`", *project)
+	}
+
+	noFlags := *machine == "" && *path == "" && *tport == "" && *folderDir == "" && *handoff == ""
+	if noFlags && !interactive {
+		return errors.New("config requires at least one of -machine, -path, -transport, -folder, or -handoff")
+	}
+
+	values := ui.InitValues{
+		ProjectID: *project,
+		Machine:   *machine,
+		Path:      *path,
+		Transport: *tport,
+		Folder:    *folderDir,
+		Handoff:   *handoff,
+	}
+	if noFlags {
+		// Seed the form with the current settings so unedited fields round-trip unchanged.
+		seed := values
+		seed.Machine = cfg.Machine
+		seed.Transport = existing.Transport
+		seed.Folder = existing.TransportConfig["dir"]
+		seed.Handoff = existing.Handoff
+		values, err = ui.RunInitForm(seed)
+		if err != nil {
+			return err
+		}
+	}
+
+	updates := map[string]string{}
+	if values.Transport != "" {
+		updates["transport"] = values.Transport
+	}
+	if values.Handoff != "" {
+		updates["handoff"] = values.Handoff
+	}
+	if values.Folder != "" {
+		updates["folder"] = values.Folder
+	}
+	p := existing.WithUpdates(updates)
+	machineName := values.Machine
+	if machineName == "" {
+		machineName = cfg.Machine
+	}
+	if values.Path != "" {
+		if p.Paths == nil {
+			p.Paths = map[string]string{}
+		}
+		p.Paths[machineName] = values.Path
+	}
+	cfg.Projects[*project] = p
+	if err := cfg.Save(cfgPath); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf("Updated project %q", *project)
+	if interactive {
+		fmt.Println(ui.RenderMessage("ok", msg))
+	} else {
+		fmt.Println(msg)
 	}
 	return nil
 }
