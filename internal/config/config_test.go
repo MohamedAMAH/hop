@@ -36,3 +36,20 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 }
+
+func TestWithUpdatesLeavesOtherFields(t *testing.T) {
+	base := Project{
+		Paths:           map[string]string{"win": `D:\hop`},
+		Transport:       "folder",
+		TransportConfig: map[string]string{"dir": `E:\sync`},
+		Handoff:         "manual",
+	}
+	// Change only the handoff; everything else must survive.
+	got := base.WithUpdates(map[string]string{"handoff": "auto"})
+	if got.Handoff != "auto" {
+		t.Fatalf("handoff not updated: %q", got.Handoff)
+	}
+	if got.Transport != "folder" || got.TransportConfig["dir"] != `E:\sync` || got.Paths["win"] != `D:\hop` {
+		t.Fatalf("WithUpdates wiped an unspecified field: %+v", got)
+	}
+}

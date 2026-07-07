@@ -104,3 +104,32 @@ func (c Config) Save(path string) error {
 	}
 	return nil
 }
+
+/*
+WithUpdates returns a copy of the project with only the supplied fields
+overwritten; any key absent from u leaves that field unchanged. The "folder"
+key maps into TransportConfig["dir"]; "path" is handled by the caller, which
+knows the machine name.
+*/
+func (p Project) WithUpdates(u map[string]string) Project {
+	out := p
+	// Copy the maps so the receiver is never mutated.
+	out.Paths = map[string]string{}
+	for k, v := range p.Paths {
+		out.Paths[k] = v
+	}
+	out.TransportConfig = map[string]string{}
+	for k, v := range p.TransportConfig {
+		out.TransportConfig[k] = v
+	}
+	if v, ok := u["transport"]; ok {
+		out.Transport = v
+	}
+	if v, ok := u["handoff"]; ok {
+		out.Handoff = v
+	}
+	if v, ok := u["folder"]; ok {
+		out.TransportConfig["dir"] = v
+	}
+	return out
+}
