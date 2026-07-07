@@ -37,5 +37,8 @@ Thumbs.db
 # Local Claude Code state
 .claude/
 
+# Subagent-driven-development scratch (ledger, briefs, reports)
+.superpowers/
+
 # Design docs (kept out of source per project preference)
 docs/
