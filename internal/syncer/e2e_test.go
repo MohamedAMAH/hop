@@ -40,7 +40,7 @@ func TestEndToEndCrossRoot(t *testing.T) {
 		Cfg:   config.Config{Machine: "B", Projects: map[string]config.Project{"demo": {Paths: map[string]string{"B": consRoot}}}},
 		Agent: claude.New(), Transport: shared, Home: consHome, StateDir: t.TempDir(), OS: osinfo.Unix,
 	}
-	if _, err := Pull(cons, "demo", "2026-07-06T01:00:00Z", false); err != nil {
+	if _, err := Pull(cons, "demo", "2026-07-06T01:00:00Z", AbortResolver{}); err != nil {
 		t.Fatal(err)
 	}
 

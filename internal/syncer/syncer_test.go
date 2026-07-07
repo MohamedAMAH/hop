@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,7 +89,7 @@ func TestPullMaterializesNewSession(t *testing.T) {
 		Home: consHome, StateDir: t.TempDir(), OS: osinfo.Unix,
 	}
 
-	rep, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", false)
+	rep, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", AbortResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,13 @@ func TestPullMaterializesNewSession(t *testing.T) {
 	}
 }
 
-func TestForcedPullBacksUpDivergedSession(t *testing.T) {
+/*
+divergedSetup returns a producer Deps+root and a consumer Deps+root sharing
+one transport, where the consumer already holds a session with the same ID
+as the incoming one but byte-forked content, forcing merge.Diverged.
+*/
+func divergedSetup(t *testing.T) (Deps, string, Deps, string) {
+	t.Helper()
 	// Producer machine "win" pushes; consumer "nix" has an independently
 	// diverged local copy of the same session ID.
 	prod, prodRoot := baseDeps(t)
@@ -137,7 +144,17 @@ func TestForcedPullBacksUpDivergedSession(t *testing.T) {
 	localData := `{"cwd":"/local/only","y":999}` + "\n"
 	writeSession(t, claude.New(), cons.Home, consRoot, "s1", localData)
 
-	if _, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", true); err != nil {
+	return prod, prodRoot, cons, consRoot
+}
+
+func TestForcedPullBacksUpDivergedSession(t *testing.T) {
+	_, _, cons, consRoot := divergedSetup(t)
+	consHome := cons.Home
+	// Local content that shares neither a prefix nor a suffix relationship
+	// with the incoming bytes, forcing merge.Diverged (see divergedSetup).
+	localData := `{"cwd":"/local/only","y":999}` + "\n"
+
+	if _, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", ForceResolver{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,4 +191,76 @@ func TestForcedPullBacksUpDivergedSession(t *testing.T) {
 	if string(got[0].Data) != expectedData {
 		t.Fatalf("overwritten session data mismatch:\n got  %q\n want %q", got[0].Data, expectedData)
 	}
+}
+
+/* scriptedResolver returns a fixed Resolution and records that it was called. */
+type scriptedResolver struct {
+	res    Resolution
+	called bool
+}
+
+func (s *scriptedResolver) Resolve(string, []byte, []byte) (Resolution, error) {
+	s.called = true
+	return s.res, nil
+}
+
+func TestPullKeepLocalSkipsWrite(t *testing.T) {
+	d, prodRoot, cons, consRoot := divergedSetup(t)
+	_ = prodRoot
+	before, _ := claude.New().ListSessions(cons.Home, consRoot)
+	r := &scriptedResolver{res: KeepLocal}
+	if _, err := Pull(cons, "hop", "2026-07-08T00:00:00Z", r); err != nil {
+		t.Fatal(err)
+	}
+	if !r.called {
+		t.Fatal("resolver was not consulted on divergence")
+	}
+	after, _ := claude.New().ListSessions(cons.Home, consRoot)
+	if string(after[0].Data) != string(before[0].Data) {
+		t.Fatal("KeepLocal must not overwrite the local session")
+	}
+	_ = d
+}
+
+func TestPullAbortReturnsErrDiverged(t *testing.T) {
+	_, _, cons, _ := divergedSetup(t)
+	if _, err := Pull(cons, "hop", "2026-07-08T00:00:00Z", AbortResolver{}); !errors.Is(err, ErrDiverged) {
+		t.Fatalf("AbortResolver must yield ErrDiverged, got %v", err)
+	}
+}
+
+func TestBothAdvancedIsNoticeNotAbort(t *testing.T) {
+	// Machine A pushes session X; machine B has a NEW local session Y (no shared
+	// fork). Both advanced, but there is no per-session conflict, so pull must
+	// succeed under AbortResolver and fire the notice.
+	d, root := baseDeps(t)
+	cwd, _ := json.Marshal(root)
+	writeSession(t, claude.New(), d.Home, root, "x", `{"cwd":`+string(cwd)+`,"n":1}`+"\n")
+	if _, err := Push(d, "hop", "2026-07-08T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// Consumer with its own new local session Y and a stale last-synced sequence.
+	consHome := t.TempDir()
+	consRoot := consHome + "/proj"
+	ccwd, _ := json.Marshal(consRoot)
+	cons := Deps{
+		Cfg:   config.Config{Machine: "B", Projects: map[string]config.Project{"hop": {Paths: map[string]string{"B": consRoot}}}},
+		Agent: claude.New(), Transport: d.Transport, Home: consHome, StateDir: t.TempDir(), OS: osinfo.Unix,
+	}
+	writeSession(t, claude.New(), consHome, consRoot, "y", `{"cwd":`+string(ccwd)+`,"m":2}`+"\n")
+	notes := 0
+	cons.Notify = func(string) { notes++ }
+	rep, err := Pull(cons, "hop", "2026-07-08T01:00:00Z", AbortResolver{})
+	if err != nil {
+		t.Fatalf("both-advanced with no fork must not abort: %v", err)
+	}
+	if notes == 0 {
+		t.Fatal("expected the both-advanced notice to fire")
+	}
+	// Y survived, X arrived.
+	got, _ := claude.New().ListSessions(consHome, consRoot)
+	if len(got) != 2 {
+		t.Fatalf("expected both sessions present, got %d", len(got))
+	}
+	_ = rep
 }

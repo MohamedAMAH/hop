@@ -169,7 +169,11 @@ func cmdSync(args []string, op string) error {
 	if op == "push" {
 		rep, err = syncer.Push(d, *project, now)
 	} else {
-		rep, err = syncer.Pull(d, *project, now, *force)
+		var r syncer.Resolver = syncer.AbortResolver{}
+		if *force {
+			r = syncer.ForceResolver{}
+		}
+		rep, err = syncer.Pull(d, *project, now, r)
 	}
 	if err != nil {
 		return err

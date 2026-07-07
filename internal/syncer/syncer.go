@@ -30,6 +30,8 @@ type Deps struct {
 	Home      string
 	StateDir  string
 	OS        osinfo.OS
+	/* Notify, when set, receives informational notices such as the both-advanced heads-up. */
+	Notify func(string)
 }
 
 /* Report summarizes an operation for display. */
@@ -131,10 +133,12 @@ off; pulling risks discarding that machine's newer work.
 var ErrStalePull = errors.New("hop: another machine still holds the baton (use force to override)")
 
 /*
-Pull receives the bundle, materializes it to the local root, merges per
-session, claims the baton locally, and refreshes state.
+Pull receives the bundle, materializes each incoming session to the local root,
+merges per session (consulting r on a genuine fork), claims the baton locally,
+and refreshes state. The global sequence+dirty condition is a non-fatal notice;
+per-session merge plus r is the sole divergence authority.
 */
-func Pull(d Deps, projectID, now string, force bool) (Report, error) {
+func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 	root, err := d.localRoot(projectID)
 	if err != nil {
 		return Report{}, err
@@ -143,7 +147,6 @@ func Pull(d Deps, projectID, now string, force bool) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-
 	st, err := state.Load(d.statePath(projectID))
 	if err != nil {
 		return Report{}, err
@@ -153,14 +156,14 @@ func Pull(d Deps, projectID, now string, force bool) (Report, error) {
 		return Report{}, err
 	}
 
-	// Stale-pull: baton owned by another machine (not released) and we have no
-	// prior sync context — warn unless forced.
-	if !force && b.Meta.Baton.Owner != "" && b.Meta.Baton.Owner != d.Cfg.Machine {
+	// Stale-pull: only a forcing resolver bypasses it.
+	if !forcesStalePull(r) && b.Meta.Baton.Owner != "" && b.Meta.Baton.Owner != d.Cfg.Machine {
 		return Report{}, ErrStalePull
 	}
-	// Divergence: remote advanced past our last sync AND we have local changes.
-	if !force && b.Meta.Baton.Sequence != st.LastSyncedSequence && st.Dirty(local) {
-		return Report{}, ErrDiverged
+	// Both machines advanced: a non-fatal heads-up, not an abort. Per-session
+	// merge below is the real authority.
+	if b.Meta.Baton.Sequence != st.LastSyncedSequence && st.Dirty(local) && d.Notify != nil {
+		d.Notify("sync conflict: both machines advanced since the last sync — resolving each session")
 	}
 
 	localByID := map[string][]byte{}
@@ -174,25 +177,31 @@ func Pull(d Deps, projectID, now string, force bool) (Report, error) {
 		if err != nil {
 			return Report{}, err
 		}
-		decision := merge.Decide(localByID[in.ID], materialized)
-		switch decision {
+		switch merge.Decide(localByID[in.ID], materialized) {
 		case merge.New, merge.Update:
 			if err := d.Agent.WriteSession(d.Home, root, agent.Session{ID: in.ID, Data: materialized}); err != nil {
 				return Report{}, err
 			}
 			written++
 		case merge.Diverged:
-			if !force {
+			res, err := r.Resolve(in.ID, localByID[in.ID], materialized)
+			if err != nil {
+				return Report{}, err
+			}
+			switch res {
+			case KeepIncoming:
+				if _, err := d.Agent.BackupSession(d.Home, root, in.ID); err != nil {
+					return Report{}, err
+				}
+				if err := d.Agent.WriteSession(d.Home, root, agent.Session{ID: in.ID, Data: materialized}); err != nil {
+					return Report{}, err
+				}
+				written++
+			case KeepLocal:
+				// Leave the local session untouched.
+			case Abort:
 				return Report{}, fmt.Errorf("%w: session %s", ErrDiverged, in.ID)
 			}
-			// Preserve the discarded local divergence before overwriting it.
-			if _, err := d.Agent.BackupSession(d.Home, root, in.ID); err != nil {
-				return Report{}, err
-			}
-			if err := d.Agent.WriteSession(d.Home, root, agent.Session{ID: in.ID, Data: materialized}); err != nil {
-				return Report{}, err
-			}
-			written++
 		case merge.NoOp, merge.KeepLocalNewer, merge.KeepLocalOnly:
 			// Nothing to write.
 		}
