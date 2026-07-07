@@ -52,4 +52,14 @@ func TestWithUpdatesLeavesOtherFields(t *testing.T) {
 	if got.Transport != "folder" || got.TransportConfig["dir"] != `E:\sync` || got.Paths["win"] != `D:\hop` {
 		t.Fatalf("WithUpdates wiped an unspecified field: %+v", got)
 	}
+	// The receiver must be left untouched by WithUpdates.
+	if base.Handoff != "manual" {
+		t.Fatalf("WithUpdates mutated the receiver's Handoff: %q", base.Handoff)
+	}
+	if base.TransportConfig["dir"] != `E:\sync` {
+		t.Fatalf("WithUpdates mutated the receiver's TransportConfig: %+v", base.TransportConfig)
+	}
+	if base.Paths["win"] != `D:\hop` {
+		t.Fatalf("WithUpdates mutated the receiver's Paths: %+v", base.Paths)
+	}
 }

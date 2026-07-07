@@ -112,11 +112,12 @@ func TestPullMaterializesNewSession(t *testing.T) {
 }
 
 /*
-divergedSetup returns a producer Deps+root and a consumer Deps+root sharing
-one transport, where the consumer already holds a session with the same ID
-as the incoming one but byte-forked content, forcing merge.Diverged.
+divergedSetup returns a producer Deps+root, a consumer Deps+root sharing one
+transport, and the local-divergent session bytes it wrote for the consumer,
+where the consumer already holds a session with the same ID as the incoming
+one but byte-forked content, forcing merge.Diverged.
 */
-func divergedSetup(t *testing.T) (Deps, string, Deps, string) {
+func divergedSetup(t *testing.T) (Deps, string, Deps, string, []byte) {
 	t.Helper()
 	// Producer machine "win" pushes; consumer "nix" has an independently
 	// diverged local copy of the same session ID.
@@ -144,15 +145,12 @@ func divergedSetup(t *testing.T) (Deps, string, Deps, string) {
 	localData := `{"cwd":"/local/only","y":999}` + "\n"
 	writeSession(t, claude.New(), cons.Home, consRoot, "s1", localData)
 
-	return prod, prodRoot, cons, consRoot
+	return prod, prodRoot, cons, consRoot, []byte(localData)
 }
 
 func TestForcedPullBacksUpDivergedSession(t *testing.T) {
-	_, _, cons, consRoot := divergedSetup(t)
+	_, _, cons, consRoot, localData := divergedSetup(t)
 	consHome := cons.Home
-	// Local content that shares neither a prefix nor a suffix relationship
-	// with the incoming bytes, forcing merge.Diverged (see divergedSetup).
-	localData := `{"cwd":"/local/only","y":999}` + "\n"
 
 	if _, err := Pull(cons, "hop", "2026-07-06T01:00:00Z", ForceResolver{}); err != nil {
 		t.Fatal(err)
@@ -170,7 +168,7 @@ func TestForcedPullBacksUpDivergedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(backupBytes) != localData {
+	if string(backupBytes) != string(localData) {
 		t.Fatalf("backup bytes = %q, want %q", backupBytes, localData)
 	}
 
@@ -205,7 +203,7 @@ func (s *scriptedResolver) Resolve(string, []byte, []byte) (Resolution, error) {
 }
 
 func TestPullKeepLocalSkipsWrite(t *testing.T) {
-	d, prodRoot, cons, consRoot := divergedSetup(t)
+	d, prodRoot, cons, consRoot, _ := divergedSetup(t)
 	_ = prodRoot
 	before, _ := claude.New().ListSessions(cons.Home, consRoot)
 	r := &scriptedResolver{res: KeepLocal}
@@ -223,7 +221,7 @@ func TestPullKeepLocalSkipsWrite(t *testing.T) {
 }
 
 func TestPullAbortReturnsErrDiverged(t *testing.T) {
-	_, _, cons, _ := divergedSetup(t)
+	_, _, cons, _, _ := divergedSetup(t)
 	if _, err := Pull(cons, "hop", "2026-07-08T00:00:00Z", AbortResolver{}); !errors.Is(err, ErrDiverged) {
 		t.Fatalf("AbortResolver must yield ErrDiverged, got %v", err)
 	}

@@ -163,7 +163,7 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 	// Both machines advanced: a non-fatal heads-up, not an abort. Per-session
 	// merge below is the real authority.
 	if b.Meta.Baton.Sequence != st.LastSyncedSequence && st.Dirty(local) && d.Notify != nil {
-		d.Notify("sync conflict: both machines advanced since the last sync — resolving each session")
+		d.Notify("sync conflict: both machines advanced since the last sync — checking each session")
 	}
 
 	localByID := map[string][]byte{}
