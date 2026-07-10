@@ -423,6 +423,7 @@ func cmdConfig(args []string, interactive bool) error {
 		// Seed the form with the current settings so unedited fields round-trip unchanged.
 		seed := values
 		seed.Machine = cfg.Machine
+		seed.Path = existing.Paths[cfg.Machine]
 		seed.Transport = existing.Transport
 		seed.Folder = existing.TransportConfig["dir"]
 		seed.Handoff = existing.Handoff
@@ -452,6 +453,10 @@ func cmdConfig(args []string, interactive bool) error {
 			p.Paths = map[string]string{}
 		}
 		p.Paths[machineName] = values.Path
+	}
+	// A changed machine name renames this machine everywhere it is read from.
+	if values.Machine != "" {
+		cfg.Machine = values.Machine
 	}
 	cfg.Projects[*project] = p
 	if err := cfg.Save(cfgPath); err != nil {
