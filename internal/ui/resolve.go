@@ -31,7 +31,7 @@ func (UIResolver) Resolve(id string, local, incoming []byte) (syncer.Resolution,
 					huh.NewOption("abort", "abort"),
 				).Value(&choice),
 		),
-	)
+	).WithTheme(hopTheme())
 	if err := form.Run(); err != nil {
 		return syncer.Abort, err
 	}

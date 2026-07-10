@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"hop/internal/agent/claude"
 	"hop/internal/config"
@@ -22,6 +23,15 @@ func main() {
 	args, plain := extractPlainFlag(os.Args[1:])
 	interactive := ui.Interactive(plain)
 	if len(args) < 1 {
+		// Bare `hop` in a terminal opens the interactive home menu; otherwise
+		// it prints usage so scripts still get a clear, non-blocking result.
+		if interactive {
+			if err := runMenu(); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			return
+		}
 		usage()
 		os.Exit(2)
 	}
@@ -68,6 +78,94 @@ func extractPlainFlag(args []string) ([]string, bool) {
 /* usage prints the top-level command summary to stderr. */
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: hop [--plain] <init|push|pull|status|config> [flags]")
+}
+
+/*
+runMenu drives the interactive home menu: it shows the menu, runs the chosen
+action, and loops until the user quits. Action errors are shown and the loop
+continues rather than exiting.
+*/
+func runMenu() error {
+	for {
+		choice, err := ui.RunMenu()
+		if err != nil {
+			return err
+		}
+		if choice == ui.MenuQuit || choice == ui.MenuNone {
+			return nil
+		}
+		// Every sub-screen opens under the same banner so the app feels of a piece.
+		fmt.Println(ui.Banner())
+		var actErr error
+		switch choice {
+		case ui.MenuSetup:
+			actErr = cmdInit(nil, true)
+		case ui.MenuPush:
+			actErr = menuSync("push")
+		case ui.MenuPull:
+			actErr = menuSync("pull")
+		case ui.MenuStatus:
+			actErr = menuStatus()
+		case ui.MenuConfig:
+			actErr = menuConfig()
+		}
+		if actErr != nil {
+			fmt.Println(ui.RenderMessage("error", actErr.Error()))
+		}
+		ui.Pause()
+	}
+}
+
+/*
+chooseProject asks the user which configured project to act on. It returns an
+empty ID (and prints a hint) when no project is configured yet.
+*/
+func chooseProject() (string, error) {
+	cfgPath, _, _, err := paths()
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return "", err
+	}
+	ids := make([]string, 0, len(cfg.Projects))
+	for id := range cfg.Projects {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		fmt.Println(ui.RenderMessage("note", `no projects yet — choose "Set up / link a project" first`))
+		return "", nil
+	}
+	return ui.PickProject(ids)
+}
+
+/* menuSync picks a project and runs a push or pull for it from the home menu. */
+func menuSync(op string) error {
+	proj, err := chooseProject()
+	if err != nil || proj == "" {
+		return err
+	}
+	return cmdSync([]string{"-project", proj}, op, true)
+}
+
+/* menuStatus picks a project and shows its status from the home menu. */
+func menuStatus() error {
+	proj, err := chooseProject()
+	if err != nil || proj == "" {
+		return err
+	}
+	return cmdStatus([]string{"-project", proj}, true)
+}
+
+/* menuConfig picks a project and opens its config form from the home menu. */
+func menuConfig() error {
+	proj, err := chooseProject()
+	if err != nil || proj == "" {
+		return err
+	}
+	return cmdConfig([]string{"-project", proj}, true)
 }
 
 /* paths returns hop's config file path, state directory, and the user's home directory. */
