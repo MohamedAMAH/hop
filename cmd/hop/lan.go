@@ -109,7 +109,9 @@ func lanServe(args []string) error {
 		fmt.Println("note: mDNS advertising unavailable; use the address above for manual linking")
 	}
 	go acceptPendingLoop(svc)
-	return (&http.Server{Handler: svc.Handler()}).Serve(ln)
+	// ReadHeaderTimeout bounds how long an unauthenticated pairing dialer can hold
+	// a connection open before sending its request.
+	return (&http.Server{Handler: svc.Handler(), ReadHeaderTimeout: 10 * time.Second}).Serve(ln)
 }
 
 /*
@@ -176,7 +178,9 @@ func lanLink(args []string) error {
 		fmt.Println("linking cancelled")
 		return nil
 	}
-	peers.Upsert(lan.Peer{Name: res.PeerName, Fingerprint: res.PeerFingerprint, LastAddress: res.PeerAddress})
+	// Pin the address the operator actually dialed for future syncs; the peer's
+	// self-reported hello address can be a wildcard bind that is not routable.
+	peers.Upsert(lan.Peer{Name: res.PeerName, Fingerprint: res.PeerFingerprint, LastAddress: *peerAddr})
 	if err := peers.Save(peersPath); err != nil {
 		return err
 	}
