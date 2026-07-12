@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 )
 
 /* Peer is a machine this one has paired with over the LAN. */
@@ -16,6 +17,7 @@ type Peer struct {
 
 /* Peers is the set of paired machines, keyed by fingerprint. */
 type Peers struct {
+	mu   sync.RWMutex
 	byFP map[string]Peer
 }
 
@@ -67,12 +69,16 @@ func (p *Peers) Save(path string) error {
 
 /* ByFingerprint returns the peer with the given fingerprint, if present. */
 func (p *Peers) ByFingerprint(fp string) (Peer, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	peer, ok := p.byFP[fp]
 	return peer, ok
 }
 
 /* All returns the peers sorted by fingerprint for stable output. */
 func (p *Peers) All() []Peer {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	out := make([]Peer, 0, len(p.byFP))
 	for _, peer := range p.byFP {
 		out = append(out, peer)
@@ -83,5 +89,7 @@ func (p *Peers) All() []Peer {
 
 /* Upsert adds or replaces a peer by fingerprint. */
 func (p *Peers) Upsert(peer Peer) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.byFP[peer.Fingerprint] = peer
 }

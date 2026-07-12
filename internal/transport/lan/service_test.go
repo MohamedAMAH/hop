@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"hop/internal/agent"
 	"hop/internal/agent/claude"
 	"hop/internal/config"
 	"hop/internal/osinfo"
+	"hop/internal/state"
 	"hop/internal/syncer"
 	"hop/internal/transport/fake"
 )
@@ -208,5 +211,120 @@ func TestServiceSyncPushMaterializesAndPullReturnsBundle(t *testing.T) {
 	var probe json.RawMessage
 	if err := json.Unmarshal(raw.Bytes(), &probe); err != nil {
 		t.Fatalf("pulled bundle is not valid JSON: %v", err)
+	}
+}
+
+func TestServiceConcurrentPairDoesNotRace(t *testing.T) {
+	idServer, err := LoadOrCreateIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := &Peers{byFP: map[string]Peer{}}
+	svc := NewService(idServer, peers, "", "server", "server:9999", nil)
+	srv := httptest.NewUnstartedServer(svc.Handler())
+	srv.TLS = svc.ServerTLSConfig()
+	srv.StartTLS()
+	defer srv.Close()
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			idClient, err := LoadOrCreateIdentity(t.TempDir())
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			body := bytes.NewBufferString(fmt.Sprintf(`{"name":"client%d","listenAddress":"client%d:8888"}`, i, i))
+			resp, err := tlsClient(idClient).Post(srv.URL+"/pair", "application/json", body)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("pair: expected 200, got %d", resp.StatusCode)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	pend := svc.Pending()
+	if len(pend) != n {
+		t.Fatalf("expected %d pending pairs, got %d", n, len(pend))
+	}
+	seen := map[string]bool{}
+	for _, p := range pend {
+		if seen[p.Fingerprint] {
+			t.Fatalf("duplicate fingerprint in pending: %s", p.Fingerprint)
+		}
+		seen[p.Fingerprint] = true
+	}
+}
+
+func TestServicePullSurvivesPriorSyncWithLocalDirt(t *testing.T) {
+	idServer, err := LoadOrCreateIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	idClient, err := LoadOrCreateIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := &Peers{byFP: map[string]Peer{
+		idClient.Fingerprint: {Name: "client", Fingerprint: idClient.Fingerprint},
+	}}
+	serverRoot := "/home/server/proj"
+	depsFor, serverHome := testDeps(t, "server", "demo", serverRoot)
+	deps, err := depsFor("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a peer that has already synced once (LastSyncedSequence > 0)
+	// and then produced new local work (dirty) before the next pull.
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "sample.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.New().WriteSession(serverHome, serverRoot, agent.Session{ID: "5038b5e4", Data: fixture}); err != nil {
+		t.Fatal(err)
+	}
+	priorState := state.State{
+		ProjectID:          "demo",
+		Machine:            "server",
+		LastSyncedSequence: 3,
+		Sessions:           map[string]state.SessionSnap{}, // Empty snapshot makes the current session look dirty.
+	}
+	if err := priorState.Save(filepath.Join(deps.StateDir, "demo.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(idServer, peers, "", "server", "", depsFor)
+	srv := httptest.NewUnstartedServer(svc.Handler())
+	srv.TLS = svc.ServerTLSConfig()
+	srv.StartTLS()
+	defer srv.Close()
+
+	resp, err := tlsClient(idClient).Get(srv.URL + "/sync/pull?project=demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var raw bytes.Buffer
+	if _, err := raw.ReadFrom(resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pull: expected 200, got %d: %s", resp.StatusCode, raw.String())
+	}
+	pulled, err := decodeBundle(raw.Bytes())
+	if err != nil {
+		t.Fatalf("pulled bundle did not decode: %v", err)
+	}
+	if pulled.Meta.ProjectID != "demo" || len(pulled.Sessions) != 1 {
+		t.Fatalf("pulled bundle = %+v", pulled.Meta)
 	}
 }

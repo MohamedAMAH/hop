@@ -6,8 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
+	"sync"
 	"time"
 
+	"hop/internal/bundle"
+	"hop/internal/state"
 	"hop/internal/syncer"
 	"hop/internal/transport/fake"
 )
@@ -37,6 +41,7 @@ type Service struct {
 	name          string
 	advertiseAddr string
 	depsFor       DepsFunc
+	pendingMu     sync.Mutex
 	pending       map[string]PendingPair
 }
 
@@ -75,8 +80,10 @@ func (s *Service) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad hello", http.StatusBadRequest)
 		return
 	}
+	s.pendingMu.Lock()
 	s.pending[fp] = PendingPair{Fingerprint: fp, Name: h.Name, Address: h.ListenAddress,
 		Code: Code(s.id.Fingerprint, fp)}
+	s.pendingMu.Unlock()
 	json.NewEncoder(w).Encode(hello{Name: s.name, ListenAddress: s.advertiseAddr})
 }
 
@@ -140,6 +147,11 @@ func (s *Service) handlePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seam := fake.New()
+	// Seed the seam with the peer's current baton sequence so Push's divergence
+	// guard sees a matching remote sequence instead of a spurious mismatch
+	// against an empty transport.
+	st, _ := state.Load(filepath.Join(d.StateDir, project+".json"))
+	_ = seam.Send(&bundle.Bundle{Meta: bundle.Meta{ProjectID: project, Baton: bundle.Baton{Sequence: st.LastSyncedSequence}}})
 	d.Transport = seam
 	if _, err := syncer.Push(d, project, now()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -161,6 +173,8 @@ func (s *Service) handlePull(w http.ResponseWriter, r *http.Request) {
 
 /* Pending returns the pairing requests awaiting confirmation. */
 func (s *Service) Pending() []PendingPair {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
 	out := make([]PendingPair, 0, len(s.pending))
 	for _, p := range s.pending {
 		out = append(out, p)
@@ -170,12 +184,16 @@ func (s *Service) Pending() []PendingPair {
 
 /* Confirm pins a pending peer and persists the peer store. */
 func (s *Service) Confirm(fp string) error {
+	s.pendingMu.Lock()
 	p, ok := s.pending[fp]
+	if ok {
+		delete(s.pending, fp)
+	}
+	s.pendingMu.Unlock()
 	if !ok {
 		return errors.New("no such pending pair")
 	}
 	s.peers.Upsert(Peer{Name: p.Name, Fingerprint: p.Fingerprint, LastAddress: p.Address})
-	delete(s.pending, fp)
 	if s.peersPath == "" {
 		return nil
 	}
@@ -183,7 +201,11 @@ func (s *Service) Confirm(fp string) error {
 }
 
 /* Reject discards a pending pairing request. */
-func (s *Service) Reject(fp string) { delete(s.pending, fp) }
+func (s *Service) Reject(fp string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	delete(s.pending, fp)
+}
 
 /* now returns the current time as an RFC3339 string. */
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
