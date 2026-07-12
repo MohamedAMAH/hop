@@ -47,6 +47,8 @@ func main() {
 		err = cmdStatus(args[1:], interactive)
 	case "config":
 		err = cmdConfig(args[1:], interactive)
+	case "lan":
+		err = cmdLan(args[1:], interactive)
 	default:
 		usage()
 		os.Exit(2)
@@ -77,7 +79,7 @@ func extractPlainFlag(args []string) ([]string, bool) {
 
 /* usage prints the top-level command summary to stderr. */
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hop [--plain] <init|push|pull|status|config> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: hop [--plain] <init|push|pull|status|config|lan> [flags]")
 }
 
 /*
