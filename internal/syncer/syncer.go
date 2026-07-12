@@ -75,14 +75,17 @@ func Push(d Deps, projectID, now string) (Report, error) {
 	}
 
 	// Divergence: if the remote advanced past what we last synced AND we also
-	// have local changes, both moved.
+	// have local changes, both moved. A remote holding no sessions has no work a
+	// push could discard, so it never counts as divergence.
 	remoteSeq := 0
+	remoteHasSessions := false
 	if rb, rerr := d.Transport.Receive(projectID); rerr == nil {
 		remoteSeq = rb.Meta.Baton.Sequence
+		remoteHasSessions = len(rb.Sessions) > 0
 	} else if !errors.Is(rerr, transport.ErrNoBundle) {
 		return Report{}, rerr
 	}
-	if remoteSeq != st.LastSyncedSequence && st.Dirty(sessions) {
+	if remoteHasSessions && remoteSeq != st.LastSyncedSequence && st.Dirty(sessions) {
 		return Report{}, ErrDiverged
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	"hop/internal/agent"
 	"hop/internal/agent/claude"
+	"hop/internal/bundle"
 	"hop/internal/config"
 	"hop/internal/osinfo"
 	"hop/internal/transport/fake"
@@ -63,6 +64,50 @@ func TestPushNeutralizesAndBumpsSequence(t *testing.T) {
 	}
 	if got.Meta.Baton.Owner != "" || got.Meta.Baton.Sequence != 1 {
 		t.Fatalf("baton not released/bumped: %+v", got.Meta.Baton)
+	}
+}
+
+func localDirtySession(t *testing.T, d Deps, root string) {
+	t.Helper()
+	cwd, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, claude.New(), d.Home, root, "s1", `{"cwd":`+string(cwd)+`,"x":1}`+"\n")
+}
+
+// A fresh destination reports a bumped sequence but holds no sessions; pushing
+// local work onto it must not be mistaken for divergence.
+func TestPushToEmptyRemoteDoesNotDiverge(t *testing.T) {
+	d, root := baseDeps(t)
+	localDirtySession(t, d, root)
+	if err := d.Transport.Send(&bundle.Bundle{
+		Meta: bundle.Meta{ProjectID: "hop", Baton: bundle.Baton{Sequence: 5}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Push(d, "hop", "2026-07-12T00:00:00Z")
+	if err != nil {
+		t.Fatalf("push onto empty remote must not diverge: %v", err)
+	}
+	if rep.Sessions != 1 || rep.Sequence != 6 {
+		t.Fatalf("unexpected report: %+v", rep)
+	}
+}
+
+// When the remote actually holds sessions at a sequence we never synced and we
+// also have local changes, both machines moved and the push must abort.
+func TestPushDivergesWhenRemoteHasSessions(t *testing.T) {
+	d, root := baseDeps(t)
+	localDirtySession(t, d, root)
+	if err := d.Transport.Send(&bundle.Bundle{
+		Meta:     bundle.Meta{ProjectID: "hop", Baton: bundle.Baton{Sequence: 5}},
+		Sessions: []agent.Session{agentSession("s2", []byte(`{"cwd":"__HOP_ROOT__","y":2}`+"\n"))},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(d, "hop", "2026-07-12T00:00:00Z"); !errors.Is(err, ErrDiverged) {
+		t.Fatalf("push must diverge when remote holds unsynced sessions, got %v", err)
 	}
 }
 
