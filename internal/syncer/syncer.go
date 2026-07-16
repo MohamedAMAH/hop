@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"hop/internal/agent"
 	"hop/internal/bundle"
@@ -38,6 +39,7 @@ type Deps struct {
 type Report struct {
 	ProjectID string
 	Sessions  int
+	Files     int
 	Sequence  int
 }
 
@@ -89,14 +91,35 @@ func Push(d Deps, projectID, now string) (Report, error) {
 		return Report{}, ErrDiverged
 	}
 
-	token := bundle.SelectToken(sessions)
+	artifacts, err := d.Agent.ListArtifacts(d.Home, root)
+	if err != nil {
+		return Report{}, err
+	}
+	storeDir := d.Agent.ProjectDir(d.Home, root)
+
+	files := make([]bundle.FileEntry, 0, len(artifacts))
+	for _, a := range artifacts {
+		files = append(files, bundle.FileEntry{Path: a.RelPath, Data: a.Data, ModTime: a.ModTime})
+	}
+	token, prefixToken := bundle.SelectTokens(sessions, files)
+
 	neutral := make([]agent.Session, 0, len(sessions))
 	for _, s := range sessions {
-		data, err := rewrite.Neutralize(s.Data, root, d.OS, token)
+		data, err := neutralizeAll(s.Data, root, storeDir, d.OS, token, prefixToken)
 		if err != nil {
 			return Report{}, err
 		}
 		neutral = append(neutral, agent.Session{ID: s.ID, Data: data})
+	}
+	for i, f := range files {
+		data := f.Data
+		if strings.HasSuffix(f.Path, ".jsonl") {
+			if data, err = neutralizeAll(f.Data, root, storeDir, d.OS, token, prefixToken); err != nil {
+				return Report{}, err
+			}
+		}
+		files[i].Data = data
+		files[i].Hash = bundle.HashBytes(data)
 	}
 
 	seq := st.LastSyncedSequence
@@ -107,11 +130,13 @@ func Push(d Deps, projectID, now string) (Report, error) {
 
 	b := &bundle.Bundle{
 		Meta: bundle.Meta{
-			ProjectID: projectID,
-			Token:     token,
-			Baton:     bundle.Baton{Owner: "", Sequence: seq, UpdatedAt: now},
+			ProjectID:   projectID,
+			Token:       token,
+			PrefixToken: prefixToken,
+			Baton:       bundle.Baton{Owner: "", Sequence: seq, UpdatedAt: now},
 		},
 		Sessions: neutral,
+		Files:    files,
 	}
 	if err := d.Transport.Send(b); err != nil {
 		return Report{}, err
@@ -126,7 +151,7 @@ func Push(d Deps, projectID, now string) (Report, error) {
 	if err := st.Save(d.statePath(projectID)); err != nil {
 		return Report{}, err
 	}
-	return Report{ProjectID: projectID, Sessions: len(sessions), Sequence: seq}, nil
+	return Report{ProjectID: projectID, Sessions: len(sessions), Files: len(files), Sequence: seq}, nil
 }
 
 /*

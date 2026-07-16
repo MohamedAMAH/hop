@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"hop/internal/agent"
@@ -16,6 +17,12 @@ import (
 )
 
 func agentSession(id string, data []byte) agent.Session { return agent.Session{ID: id, Data: data} }
+
+/* jsonStr returns s encoded as a JSON string literal. */
+func jsonStr(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
 
 func writeSession(t *testing.T, c claude.Claude, home, root, id, data string) {
 	t.Helper()
@@ -64,6 +71,45 @@ func TestPushNeutralizesAndBumpsSequence(t *testing.T) {
 	}
 	if got.Meta.Baton.Owner != "" || got.Meta.Baton.Sequence != 1 {
 		t.Fatalf("baton not released/bumped: %+v", got.Meta.Baton)
+	}
+}
+
+func TestPushCapturesArtifacts(t *testing.T) {
+	d, root := baseDeps(t)
+	localDirtySession(t, d, root)
+	// A sidecar subagent transcript embedding the storage prefix, plus a memory file.
+	storeDir := claude.New().ProjectDir(d.Home, root)
+	sub := agent.Artifact{RelPath: "s1/subagents/a.jsonl",
+		Data: []byte(`{"ref":` + jsonStr(storeDir+"/s1/tool-results/x.txt") + "}\n")}
+	if err := claude.New().WriteArtifact(d.Home, root, sub); err != nil {
+		t.Fatal(err)
+	}
+	mem := agent.Artifact{RelPath: "memory/MEMORY.md", Data: []byte("- a note")}
+	if err := claude.New().WriteArtifact(d.Home, root, mem); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := Push(d, "hop", "2026-07-16T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Files != 2 {
+		t.Fatalf("expected 2 files captured, got %d", rep.Files)
+	}
+	b, _ := d.Transport.Receive("hop")
+	byPath := map[string]bundle.FileEntry{}
+	for _, f := range b.Files {
+		byPath[f.Path] = f
+	}
+	got := byPath["s1/subagents/a.jsonl"]
+	if strings.Contains(string(got.Data), storeDir) {
+		t.Fatalf("subagent jsonl not neutralized: %s", got.Data)
+	}
+	if got.Hash != bundle.HashBytes(got.Data) {
+		t.Fatal("file hash mismatch")
+	}
+	if b.Meta.PrefixToken == "" {
+		t.Fatal("prefix token not set")
 	}
 }
 
