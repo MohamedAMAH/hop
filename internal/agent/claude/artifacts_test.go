@@ -1,0 +1,76 @@
+package claude
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"hop/internal/agent"
+)
+
+func writeFile(t *testing.T, path, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListArtifactsSkipsTranscriptsAndBackups(t *testing.T) {
+	home := t.TempDir()
+	root := "d:/proj"
+	dir := Claude{}.ProjectDir(home, root)
+	writeFile(t, filepath.Join(dir, "sess.jsonl"), "transcript\n")            // excluded (top-level jsonl)
+	writeFile(t, filepath.Join(dir, "sess", "subagents", "a.jsonl"), "sub\n") // sidecar
+	writeFile(t, filepath.Join(dir, "sess", "tool-results", "t.txt"), "blob") // sidecar
+	writeFile(t, filepath.Join(dir, "memory", "MEMORY.md"), "mem")            // memory
+	writeFile(t, filepath.Join(dir, ".hop-backups", "b.jsonl"), "bak")        // excluded
+
+	arts, err := Claude{}.ListArtifacts(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, a := range arts {
+		got = append(got, a.RelPath)
+	}
+	sort.Strings(got)
+	want := []string{"memory/MEMORY.md", "sess/subagents/a.jsonl", "sess/tool-results/t.txt"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestClassify(t *testing.T) {
+	if (Claude{}).Classify("memory/MEMORY.md") != agent.KindMemory {
+		t.Fatal("memory/ must be KindMemory")
+	}
+	if (Claude{}).Classify("sess/subagents/a.jsonl") != agent.KindSidecar {
+		t.Fatal("sidecar must be KindSidecar")
+	}
+}
+
+func TestWriteAndReadArtifactRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	root := "d:/proj"
+	a := agent.Artifact{RelPath: "sess/subagents/a.jsonl", Data: []byte("hello")}
+	if err := (Claude{}).WriteArtifact(home, root, a); err != nil {
+		t.Fatal(err)
+	}
+	data, _, exists, err := Claude{}.ReadArtifact(home, root, "sess/subagents/a.jsonl")
+	if err != nil || !exists || string(data) != "hello" {
+		t.Fatalf("read back = %q exists=%v err=%v", data, exists, err)
+	}
+	_, _, exists, err = Claude{}.ReadArtifact(home, root, "sess/missing.txt")
+	if err != nil || exists {
+		t.Fatalf("missing artifact should report exists=false, got exists=%v err=%v", exists, err)
+	}
+}

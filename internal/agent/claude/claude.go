@@ -2,6 +2,7 @@ package claude
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,6 +113,128 @@ func (c Claude) BackupSession(home, projectRoot, id string) (string, error) {
 		return "", err
 	}
 	return final, nil
+}
+
+/* Classify reports memory files by their leading path segment and treats everything else as a write-once sidecar. */
+func (Claude) Classify(relPath string) agent.Kind {
+	if relPath == "memory" || strings.HasPrefix(relPath, "memory/") {
+		return agent.KindMemory
+	}
+	return agent.KindSidecar
+}
+
+/*
+ListArtifacts walks the project store and returns every file except the
+top-level transcripts and hop's own .hop-backups. Each returned path is
+relative and '/'-separated. A file whose size or mtime changes across the
+read is skipped, since it is still being written.
+*/
+func (c Claude) ListArtifacts(home, projectRoot string) ([]agent.Artifact, error) {
+	dir := c.ProjectDir(home, projectRoot)
+	var out []agent.Artifact
+	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if e.IsDir() {
+			if e.Name() == ".hop-backups" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		// Top-level *.jsonl are transcripts handled by ListSessions.
+		if !strings.Contains(rel, "/") && strings.HasSuffix(rel, ".jsonl") {
+			return nil
+		}
+		art, ok, err := stableRead(p, rel)
+		if err != nil {
+			return err
+		}
+		if ok {
+			out = append(out, art)
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+/* stableRead reads p and returns its artifact only when size and mtime are unchanged across the read. */
+func stableRead(p, rel string) (agent.Artifact, bool, error) {
+	before, err := os.Stat(p)
+	if err != nil {
+		return agent.Artifact{}, false, err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return agent.Artifact{}, false, err
+	}
+	after, err := os.Stat(p)
+	if err != nil {
+		return agent.Artifact{}, false, err
+	}
+	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return agent.Artifact{}, false, nil
+	}
+	return agent.Artifact{RelPath: rel, Data: data, ModTime: after.ModTime().UnixNano()}, true, nil
+}
+
+/* WriteArtifact writes one artifact atomically (temp file + rename) under the project store, creating parent directories. */
+func (c Claude) WriteArtifact(home, projectRoot string, a agent.Artifact) error {
+	dir := c.ProjectDir(home, projectRoot)
+	dest := filepath.Join(dir, filepath.FromSlash(a.RelPath))
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dest), "hop.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(a.Data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+/* ReadArtifact returns an artifact's bytes and mod-time, or exists=false when it is absent. */
+func (c Claude) ReadArtifact(home, projectRoot, relPath string) ([]byte, int64, bool, error) {
+	dest := filepath.Join(c.ProjectDir(home, projectRoot), filepath.FromSlash(relPath))
+	info, err := os.Stat(dest)
+	if os.IsNotExist(err) {
+		return nil, 0, false, nil
+	}
+	if err != nil {
+		return nil, 0, false, err
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	return data, info.ModTime().UnixNano(), true, nil
 }
 
 var _ agent.Agent = Claude{}
