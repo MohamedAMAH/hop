@@ -113,6 +113,31 @@ func TestPushCapturesArtifacts(t *testing.T) {
 	}
 }
 
+func TestPushDoesNotRewriteMemoryJSONL(t *testing.T) {
+	d, root := baseDeps(t)
+	localDirtySession(t, d, root)
+	// A memory .jsonl file embedding the storage prefix must be copied byte-for-byte.
+	storeDir := claude.New().ProjectDir(d.Home, root)
+	mem := agent.Artifact{RelPath: "memory/notes.jsonl",
+		Data: []byte(`{"ref":` + jsonStr(storeDir+"/s1/tool-results/x.txt") + "}\n")}
+	if err := claude.New().WriteArtifact(d.Home, root, mem); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Push(d, "hop", "2026-07-16T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := d.Transport.Receive("hop")
+	byPath := map[string]bundle.FileEntry{}
+	for _, f := range b.Files {
+		byPath[f.Path] = f
+	}
+	got := byPath["memory/notes.jsonl"]
+	if string(got.Data) != string(mem.Data) {
+		t.Fatalf("memory jsonl must be preserved byte-for-byte:\n got  %q\n want %q", got.Data, mem.Data)
+	}
+}
+
 func localDirtySession(t *testing.T, d Deps, root string) {
 	t.Helper()
 	cwd, err := json.Marshal(root)

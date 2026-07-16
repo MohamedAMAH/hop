@@ -58,6 +58,21 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestRewritesPaths(t *testing.T) {
+	if !(Claude{}).RewritesPaths("s1/subagents/a.jsonl") {
+		t.Fatal("a sidecar .jsonl must report RewritesPaths true")
+	}
+	if (Claude{}).RewritesPaths("memory/notes.jsonl") {
+		t.Fatal("a memory .jsonl must report RewritesPaths false")
+	}
+	if (Claude{}).RewritesPaths("s1/tool-results/x.txt") {
+		t.Fatal("a non-jsonl sidecar must report RewritesPaths false")
+	}
+	if (Claude{}).RewritesPaths("memory/MEMORY.md") {
+		t.Fatal("a non-jsonl memory file must report RewritesPaths false")
+	}
+}
+
 func TestWriteAndReadArtifactRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	root := "d:/proj"

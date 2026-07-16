@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"hop/internal/agent"
 	"hop/internal/bundle"
@@ -112,7 +111,7 @@ func Push(d Deps, projectID, now string) (Report, error) {
 	}
 	for i, f := range files {
 		data := f.Data
-		if strings.HasSuffix(f.Path, ".jsonl") {
+		if d.Agent.RewritesPaths(f.Path) {
 			if data, err = neutralizeAll(f.Data, root, storeDir, d.OS, token, prefixToken); err != nil {
 				return Report{}, err
 			}
@@ -243,7 +242,7 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 			return Report{}, fmt.Errorf("hop: artifact %q failed its integrity check", f.Path)
 		}
 		data := f.Data
-		if strings.HasSuffix(f.Path, ".jsonl") {
+		if d.Agent.RewritesPaths(f.Path) {
 			if data, err = materializeAll(f.Data, root, storeDir, d.OS, b.Meta.Token, b.Meta.PrefixToken); err != nil {
 				return Report{}, err
 			}

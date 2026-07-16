@@ -38,4 +38,6 @@ type Agent interface {
 	ReadArtifact(home, projectRoot, relPath string) (data []byte, modTime int64, exists bool, err error)
 	/* Classify reports how relPath merges across machines. */
 	Classify(relPath string) Kind
+	/* RewritesPaths reports whether relPath's bytes embed machine-specific paths that must be neutralized on capture and re-homed on materialize. */
+	RewritesPaths(relPath string) bool
 }

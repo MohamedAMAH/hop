@@ -237,4 +237,9 @@ func (c Claude) ReadArtifact(home, projectRoot, relPath string) ([]byte, int64, 
 	return data, info.ModTime().UnixNano(), true, nil
 }
 
+/* RewritesPaths reports that claude transcripts (.jsonl files) embed machine-specific paths, except memory files, which are preserved byte-for-byte. */
+func (c Claude) RewritesPaths(relPath string) bool {
+	return strings.HasSuffix(relPath, ".jsonl") && c.Classify(relPath) != agent.KindMemory
+}
+
 var _ agent.Agent = Claude{}
