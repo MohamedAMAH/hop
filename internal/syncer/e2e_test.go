@@ -1,11 +1,14 @@
 package syncer
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"hop/internal/agent"
 	"hop/internal/agent/claude"
 	"hop/internal/config"
 	"hop/internal/osinfo"
@@ -60,5 +63,54 @@ func TestEndToEndCrossRoot(t *testing.T) {
 	}
 	if !strings.Contains(text, "edit /home/b/demo/main.go please") {
 		t.Fatalf("embedded free-form path not rewritten:\n%s", text)
+	}
+}
+
+func TestFullSessionSyncResolvesSidecarReference(t *testing.T) {
+	// Machine A.
+	a, aRoot := baseDeps(t)
+	localDirtySession(t, a, aRoot)
+	aStore := claude.New().ProjectDir(a.Home, aRoot)
+	ref := aStore + "/s1/tool-results/x.txt"
+	if err := claude.New().WriteArtifact(a.Home, aRoot,
+		agent.Artifact{RelPath: "s1/subagents/agent-1.jsonl", Data: []byte(`{"ref":` + jsonStr(ref) + "}\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.New().WriteArtifact(a.Home, aRoot,
+		agent.Artifact{RelPath: "s1/tool-results/x.txt", Data: []byte("payload-bytes")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(a, "hop", "2026-07-16T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Machine B: different home, different project root, shared transport.
+	b, bRoot := baseDeps(t)
+	b.Transport = a.Transport
+	if _, err := Pull(b, "hop", "2026-07-16T00:01:00Z", AbortResolver{}); err != nil {
+		t.Fatal(err)
+	}
+	bStore := claude.New().ProjectDir(b.Home, bRoot)
+	sub, _, ok, _ := claude.New().ReadArtifact(b.Home, bRoot, "s1/subagents/agent-1.jsonl")
+	if !ok {
+		t.Fatal("subagent transcript missing on B")
+	}
+	// Decode rather than compare raw bytes: a store dir may contain
+	// backslashes (Windows), which the JSON encoding escapes as "\\".
+	var decoded struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(sub), &decoded); err != nil {
+		t.Fatalf("subagent transcript is not valid JSON: %v\n%s", err, sub)
+	}
+	if decoded.Ref != bStore+"/s1/tool-results/x.txt" {
+		t.Fatalf("reference not re-homed to B: %q", decoded.Ref)
+	}
+	if strings.Contains(decoded.Ref, aStore) {
+		t.Fatalf("reference still points at A: %q", decoded.Ref)
+	}
+	payload, _, ok, _ := claude.New().ReadArtifact(b.Home, bRoot, "s1/tool-results/x.txt")
+	if !ok || string(payload) != "payload-bytes" {
+		t.Fatalf("payload not identical on B: %q ok=%v", payload, ok)
 	}
 }
