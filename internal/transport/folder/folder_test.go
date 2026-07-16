@@ -36,6 +36,36 @@ func TestFolderRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFolderRoundTripsFiles(t *testing.T) {
+	dir := t.TempDir()
+	f := New(dir)
+	in := &bundle.Bundle{
+		Meta:     bundle.Meta{ProjectID: "hop", Baton: bundle.Baton{Sequence: 1}},
+		Sessions: []agent.Session{{ID: "s1", Data: []byte("hi\n")}},
+		Files: []bundle.FileEntry{
+			{Path: "s1/subagents/a.jsonl", Data: []byte("sub"), Hash: bundle.HashBytes([]byte("sub")), ModTime: 7},
+			{Path: "memory/MEMORY.md", Data: []byte("m"), Hash: bundle.HashBytes([]byte("m")), ModTime: 9},
+		},
+	}
+	if err := f.Send(in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.Receive("hop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Files) != 2 {
+		t.Fatalf("got %d files, want 2", len(out.Files))
+	}
+	byPath := map[string]bundle.FileEntry{}
+	for _, e := range out.Files {
+		byPath[e.Path] = e
+	}
+	if string(byPath["memory/MEMORY.md"].Data) != "m" || byPath["memory/MEMORY.md"].ModTime != 9 {
+		t.Fatalf("memory file not round-tripped: %+v", byPath["memory/MEMORY.md"])
+	}
+}
+
 func TestFolderReceiveEmptyDirReturnsErrNoBundle(t *testing.T) {
 	dir := t.TempDir()
 	f := New(dir)

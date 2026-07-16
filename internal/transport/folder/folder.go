@@ -35,6 +35,13 @@ type manifestEntry struct {
 	Bytes int64  `json:"bytes"`
 }
 
+/* fileEntry records one synced non-transcript file in the manifest. */
+type fileEntry struct {
+	Path    string `json:"path"`
+	Hash    string `json:"hash"`
+	ModTime int64  `json:"modTime"`
+}
+
 /*
 diskMeta is the on-disk envelope written to meta.json. It carries the
 domain bundle.Meta plus a manifest of the session files that belong to it;
@@ -43,6 +50,7 @@ the manifest never leaks into bundle.Meta itself.
 type diskMeta struct {
 	Meta     bundle.Meta     `json:"meta"`
 	Manifest []manifestEntry `json:"manifest"`
+	Files    []fileEntry     `json:"files"`
 }
 
 func (f *Folder) projectDir(projectID string) string {
@@ -74,7 +82,18 @@ func (f *Folder) Send(b *bundle.Bundle) error {
 	}
 	// Best-effort prune of session files left over from an older push; Receive's manifest check is the real guarantee.
 	pruneStaleSessionFiles(pd, kept)
-	dm := diskMeta{Meta: b.Meta, Manifest: manifest}
+	fileManifest := make([]fileEntry, 0, len(b.Files))
+	for _, fe := range b.Files {
+		dest := filepath.Join(pd, "files", filepath.FromSlash(fe.Path))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if err := writeAtomic(dest, fe.Data); err != nil {
+			return err
+		}
+		fileManifest = append(fileManifest, fileEntry{Path: fe.Path, Hash: fe.Hash, ModTime: fe.ModTime})
+	}
+	dm := diskMeta{Meta: b.Meta, Manifest: manifest, Files: fileManifest}
 	metaBytes, err := json.MarshalIndent(dm, "", "  ")
 	if err != nil {
 		return err
@@ -137,7 +156,18 @@ func (f *Folder) Receive(projectID string) (*bundle.Bundle, error) {
 		}
 		sessions = append(sessions, agent.Session{ID: entry.ID, Data: data})
 	}
-	return &bundle.Bundle{Meta: dm.Meta, Sessions: sessions}, nil
+	files := make([]bundle.FileEntry, 0, len(dm.Files))
+	for _, fe := range dm.Files {
+		data, err := os.ReadFile(filepath.Join(pd, "files", filepath.FromSlash(fe.Path)))
+		if err != nil {
+			return nil, err
+		}
+		if bundle.HashBytes(data) != fe.Hash {
+			return nil, fmt.Errorf("folder: file %q failed its integrity check", fe.Path)
+		}
+		files = append(files, bundle.FileEntry{Path: fe.Path, Data: data, Hash: fe.Hash, ModTime: fe.ModTime})
+	}
+	return &bundle.Bundle{Meta: dm.Meta, Sessions: sessions, Files: files}, nil
 }
 
 func writeAtomic(path string, data []byte) error {
