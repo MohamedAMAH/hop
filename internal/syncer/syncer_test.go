@@ -318,6 +318,60 @@ func TestPullAbortReturnsErrDiverged(t *testing.T) {
 	}
 }
 
+func TestPullMergesArtifactsByKind(t *testing.T) {
+	// Source machine pushes a sidecar + a memory file.
+	src, srcRoot := baseDeps(t)
+	localDirtySession(t, src, srcRoot)
+	if err := claude.New().WriteArtifact(src.Home, srcRoot,
+		agent.Artifact{RelPath: "s1/tool-results/x.txt", Data: []byte("payload")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.New().WriteArtifact(src.Home, srcRoot,
+		agent.Artifact{RelPath: "memory/MEMORY.md", Data: []byte("v-new"), ModTime: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(src, "hop", "2026-07-16T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Destination machine shares the transport and pulls.
+	dst, dstRoot := baseDeps(t)
+	dst.Transport = src.Transport
+	if _, err := Pull(dst, "hop", "2026-07-16T00:01:00Z", AbortResolver{}); err != nil {
+		t.Fatal(err)
+	}
+	data, _, ok, _ := claude.New().ReadArtifact(dst.Home, dstRoot, "s1/tool-results/x.txt")
+	if !ok || string(data) != "payload" {
+		t.Fatalf("sidecar payload not materialized: %q ok=%v", data, ok)
+	}
+	mem, _, ok, _ := claude.New().ReadArtifact(dst.Home, dstRoot, "memory/MEMORY.md")
+	if !ok || string(mem) != "v-new" {
+		t.Fatalf("memory not written: %q ok=%v", mem, ok)
+	}
+}
+
+func TestPullRejectsUnsafeArtifactPath(t *testing.T) {
+	dst, _ := baseDeps(t)
+	dst.Transport.Send(&bundle.Bundle{
+		Meta:  bundle.Meta{ProjectID: "hop", Baton: bundle.Baton{Sequence: 1}},
+		Files: []bundle.FileEntry{{Path: "../escape.txt", Data: []byte("x"), Hash: bundle.HashBytes([]byte("x"))}},
+	})
+	if _, err := Pull(dst, "hop", "2026-07-16T00:00:00Z", AbortResolver{}); err == nil {
+		t.Fatal("expected pull to reject a traversal path")
+	}
+}
+
+func TestPullRejectsBadHash(t *testing.T) {
+	dst, _ := baseDeps(t)
+	dst.Transport.Send(&bundle.Bundle{
+		Meta:  bundle.Meta{ProjectID: "hop", Baton: bundle.Baton{Sequence: 1}},
+		Files: []bundle.FileEntry{{Path: "s1/tool-results/x.txt", Data: []byte("x"), Hash: "deadbeef"}},
+	})
+	if _, err := Pull(dst, "hop", "2026-07-16T00:00:00Z", AbortResolver{}); err == nil {
+		t.Fatal("expected pull to reject a bad hash")
+	}
+}
+
 func TestBothAdvancedIsNoticeNotAbort(t *testing.T) {
 	// Machine A pushes session X; machine B has a NEW local session Y (no shared
 	// fork). Both advanced, but there is no per-session conflict, so pull must

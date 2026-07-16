@@ -15,7 +15,6 @@ import (
 	"hop/internal/config"
 	"hop/internal/merge"
 	"hop/internal/osinfo"
-	"hop/internal/rewrite"
 	"hop/internal/state"
 	"hop/internal/transport"
 )
@@ -201,7 +200,7 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 
 	written := 0
 	for _, in := range b.Sessions {
-		materialized, err := rewrite.Materialize(in.Data, root, d.OS, b.Meta.Token)
+		materialized, err := materializeAll(in.Data, root, d.Agent.ProjectDir(d.Home, root), d.OS, b.Meta.Token, b.Meta.PrefixToken)
 		if err != nil {
 			return Report{}, err
 		}
@@ -235,6 +234,28 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 		}
 	}
 
+	storeDir := d.Agent.ProjectDir(d.Home, root)
+	for _, f := range b.Files {
+		if err := safeArtifactPath(f.Path); err != nil {
+			return Report{}, err
+		}
+		if bundle.HashBytes(f.Data) != f.Hash {
+			return Report{}, fmt.Errorf("hop: artifact %q failed its integrity check", f.Path)
+		}
+		data := f.Data
+		if strings.HasSuffix(f.Path, ".jsonl") {
+			if data, err = materializeAll(f.Data, root, storeDir, d.OS, b.Meta.Token, b.Meta.PrefixToken); err != nil {
+				return Report{}, err
+			}
+		}
+		if !d.mergeArtifact(root, f, data) {
+			continue
+		}
+		if err := d.Agent.WriteArtifact(d.Home, root, agent.Artifact{RelPath: f.Path, Data: data, ModTime: f.ModTime}); err != nil {
+			return Report{}, err
+		}
+	}
+
 	// Claim the baton locally and record this sync.
 	st.ProjectID = projectID
 	st.Machine = d.Cfg.Machine
@@ -260,4 +281,43 @@ func snapshot(sessions []agent.Session) map[string]state.SessionSnap {
 		m[s.ID] = state.Snap(s.Data)
 	}
 	return m
+}
+
+/*
+mergeArtifact reports whether the incoming file f (with materialized bytes)
+should be written locally. Sidecars are write-once: absent files are written,
+identical files are skipped, and a hash conflict is skipped with a warning.
+Memory files are written when newer, and on an equal mod-time with different
+content the incoming copy wins with a warning.
+*/
+func (d Deps) mergeArtifact(root string, f bundle.FileEntry, data []byte) bool {
+	local, localMod, exists, err := d.Agent.ReadArtifact(d.Home, root, f.Path)
+	if err != nil || !exists {
+		return err == nil
+	}
+	sameContent := bundle.HashBytes(local) == bundle.HashBytes(data)
+	switch d.Agent.Classify(f.Path) {
+	case agent.KindMemory:
+		if f.ModTime > localMod {
+			return true
+		}
+		if f.ModTime == localMod && !sameContent {
+			d.warn(fmt.Sprintf("memory %q differs at the same time; taking the incoming copy", f.Path))
+			return true
+		}
+		return false
+	default: // KindSidecar
+		if sameContent {
+			return false
+		}
+		d.warn(fmt.Sprintf("sidecar %q already exists with different content; keeping the local copy", f.Path))
+		return false
+	}
+}
+
+/* warn sends an informational message through Notify when it is set. */
+func (d Deps) warn(msg string) {
+	if d.Notify != nil {
+		d.Notify(msg)
+	}
 }
