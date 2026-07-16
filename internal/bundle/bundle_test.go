@@ -1,28 +1,30 @@
 package bundle
 
 import (
+	"strings"
 	"testing"
 
 	"hop/internal/agent"
 )
 
-func TestSelectTokenDefaultWhenNoCollision(t *testing.T) {
-	s := []agent.Session{{ID: "a", Data: []byte(`{"cwd":"/x"}`)}}
-	if got := SelectToken(s); got != DefaultToken {
-		t.Fatalf("SelectToken = %q, want %q", got, DefaultToken)
+func TestSelectTokensAreDistinctAndNonColliding(t *testing.T) {
+	sessions := []agent.Session{{ID: "s", Data: []byte(`{"x":"__HOP_ROOT__ and __HOP_STORE__"}`)}}
+	files := []FileEntry{{Path: "memory/m.md", Data: []byte("__HOP_ROOT_1__")}}
+	root, prefix := SelectTokens(sessions, files)
+	if root == prefix {
+		t.Fatalf("tokens must differ: %q", root)
+	}
+	all := string(sessions[0].Data) + string(files[0].Data)
+	if strings.Contains(all, root) || strings.Contains(all, prefix) {
+		t.Fatalf("tokens collide with content: root=%q prefix=%q", root, prefix)
 	}
 }
 
-func TestSelectTokenAvoidsCollision(t *testing.T) {
-	s := []agent.Session{{ID: "a", Data: []byte(`{"msg":"literal __HOP_ROOT__ here"}`)}}
-	got := SelectToken(s)
-	if got == DefaultToken {
-		t.Fatalf("SelectToken must avoid a colliding token, got default")
+func TestHashBytesIsStable(t *testing.T) {
+	if HashBytes([]byte("abc")) != HashBytes([]byte("abc")) {
+		t.Fatal("hash not stable")
 	}
-	// The chosen alternate must not itself collide.
-	for _, sess := range s {
-		if contains(sess.Data, []byte(got)) {
-			t.Fatalf("alternate token %q still collides", got)
-		}
+	if HashBytes([]byte("abc")) == HashBytes([]byte("abd")) {
+		t.Fatal("hash collision on different input")
 	}
 }
