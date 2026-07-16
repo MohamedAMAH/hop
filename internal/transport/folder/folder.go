@@ -44,8 +44,9 @@ type fileEntry struct {
 
 /*
 diskMeta is the on-disk envelope written to meta.json. It carries the
-domain bundle.Meta plus a manifest of the session files that belong to it;
-the manifest never leaks into bundle.Meta itself.
+domain bundle.Meta plus a manifest of the session files and a manifest of
+the non-transcript files that belong to it; neither manifest leaks into
+bundle.Meta itself.
 */
 type diskMeta struct {
 	Meta     bundle.Meta     `json:"meta"`
@@ -59,7 +60,8 @@ func (f *Folder) projectDir(projectID string) string {
 
 /*
 Send writes one <id>.jsonl per session, prunes stale session files left
-over from an older push, then writes meta.json last as the commit marker.
+over from an older push, writes the bundle's files under files/, then
+writes meta.json last as the commit marker.
 */
 func (f *Folder) Send(b *bundle.Bundle) error {
 	pd := f.projectDir(b.Meta.ProjectID)
@@ -121,9 +123,9 @@ func pruneStaleSessionFiles(dir string, kept map[string]bool) {
 
 /*
 Receive reads the bundle for projectID, or transport.ErrNoBundle if absent.
-Every manifest entry is validated against the file on disk; a missing file
-or a byte-length/hash mismatch returns transport.ErrIncompleteBundle rather
-than a partial bundle.
+Every session manifest entry and every files manifest entry is validated
+against the file on disk; a missing file or a byte-length/hash mismatch
+returns transport.ErrIncompleteBundle rather than a partial bundle.
 */
 func (f *Folder) Receive(projectID string) (*bundle.Bundle, error) {
 	pd := f.projectDir(projectID)
@@ -159,11 +161,14 @@ func (f *Folder) Receive(projectID string) (*bundle.Bundle, error) {
 	files := make([]bundle.FileEntry, 0, len(dm.Files))
 	for _, fe := range dm.Files {
 		data, err := os.ReadFile(filepath.Join(pd, "files", filepath.FromSlash(fe.Path)))
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: missing file %s", transport.ErrIncompleteBundle, fe.Path)
+		}
 		if err != nil {
 			return nil, err
 		}
 		if bundle.HashBytes(data) != fe.Hash {
-			return nil, fmt.Errorf("folder: file %q failed its integrity check", fe.Path)
+			return nil, fmt.Errorf("%w: file %s failed its integrity check", transport.ErrIncompleteBundle, fe.Path)
 		}
 		files = append(files, bundle.FileEntry{Path: fe.Path, Data: data, Hash: fe.Hash, ModTime: fe.ModTime})
 	}
