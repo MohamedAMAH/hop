@@ -86,6 +86,9 @@ func (f *Folder) Send(b *bundle.Bundle) error {
 	pruneStaleSessionFiles(pd, kept)
 	fileManifest := make([]fileEntry, 0, len(b.Files))
 	for _, fe := range b.Files {
+		if err := bundle.ValidFilePath(fe.Path); err != nil {
+			return err
+		}
 		dest := filepath.Join(pd, "files", filepath.FromSlash(fe.Path))
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
@@ -160,6 +163,9 @@ func (f *Folder) Receive(projectID string) (*bundle.Bundle, error) {
 	}
 	files := make([]bundle.FileEntry, 0, len(dm.Files))
 	for _, fe := range dm.Files {
+		if err := bundle.ValidFilePath(fe.Path); err != nil {
+			return nil, fmt.Errorf("hop: bundle file manifest has an invalid path: %w", err)
+		}
 		data, err := os.ReadFile(filepath.Join(pd, "files", filepath.FromSlash(fe.Path)))
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("%w: missing file %s", transport.ErrIncompleteBundle, fe.Path)

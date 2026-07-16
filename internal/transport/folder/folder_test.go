@@ -1,6 +1,7 @@
 package folder
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -160,5 +161,32 @@ func TestFolderReceiveReturnsErrIncompleteBundleWhenSessionFileHashMismatch(t *t
 	}
 	if _, err := f.Receive("hop"); !errors.Is(err, transport.ErrIncompleteBundle) {
 		t.Fatalf("hash mismatch must return ErrIncompleteBundle, got %v", err)
+	}
+}
+
+func TestFolderReceiveRejectsUnsafeFilePath(t *testing.T) {
+	dir := t.TempDir()
+	f := New(dir)
+	b := &bundle.Bundle{
+		Meta: bundle.Meta{ProjectID: "hop", Token: bundle.DefaultToken, Baton: bundle.Baton{Owner: "win", Sequence: 1}},
+		Files: []bundle.FileEntry{
+			{Path: "memory/MEMORY.md", Data: []byte("m"), Hash: bundle.HashBytes([]byte("m"))},
+		},
+	}
+	if err := f.Send(b); err != nil {
+		t.Fatal(err)
+	}
+	// Hand-edit meta.json, as if it were shared/untrusted, so the file manifest names a traversal path.
+	metaPath := filepath.Join(dir, "hop", "meta.json")
+	metaBytes, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := bytes.Replace(metaBytes, []byte("memory/MEMORY.md"), []byte("../escape.txt"), 1)
+	if err := os.WriteFile(metaPath, tampered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Receive("hop"); err == nil {
+		t.Fatal("expected Receive to reject an unsafe file path in the manifest")
 	}
 }

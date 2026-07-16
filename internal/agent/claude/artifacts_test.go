@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"hop/internal/agent"
 )
@@ -87,5 +88,23 @@ func TestWriteAndReadArtifactRoundTrip(t *testing.T) {
 	_, _, exists, err = Claude{}.ReadArtifact(home, root, "sess/missing.txt")
 	if err != nil || exists {
 		t.Fatalf("missing artifact should report exists=false, got exists=%v err=%v", exists, err)
+	}
+}
+
+func TestWriteArtifactPreservesModTime(t *testing.T) {
+	home := t.TempDir()
+	root := "d:/proj"
+	want := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).UnixNano()
+	a := agent.Artifact{RelPath: "memory/MEMORY.md", Data: []byte("note"), ModTime: want}
+	if err := (Claude{}).WriteArtifact(home, root, a); err != nil {
+		t.Fatal(err)
+	}
+	_, got, exists, err := Claude{}.ReadArtifact(home, root, "memory/MEMORY.md")
+	if err != nil || !exists {
+		t.Fatalf("read back exists=%v err=%v", exists, err)
+	}
+	// Compared at second granularity, since some filesystems do not preserve sub-second mod times.
+	if got/1e9 != want/1e9 {
+		t.Fatalf("mod time not preserved: got %d, want %d", got, want)
 	}
 }

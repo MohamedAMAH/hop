@@ -64,6 +64,9 @@ func decodeBundle(data []byte) (*bundle.Bundle, error) {
 		b.Sessions = append(b.Sessions, agent.Session{ID: s.ID, Data: s.Data})
 	}
 	for _, f := range w.Files {
+		if err := bundle.ValidFilePath(f.Path); err != nil {
+			return nil, fmt.Errorf("lan: file %s has an invalid path: %w", f.Path, err)
+		}
 		if bundle.HashBytes(f.Data) != f.Hash {
 			return nil, fmt.Errorf("lan: file %s failed its integrity hash", f.Path)
 		}

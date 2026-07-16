@@ -58,3 +58,17 @@ func TestWireRejectsTamper(t *testing.T) {
 		t.Fatal("expected a hash-mismatch error on tampered payload")
 	}
 }
+
+func TestWireDecodeRejectsUnsafeFilePath(t *testing.T) {
+	b := &bundle.Bundle{
+		Meta:  bundle.Meta{ProjectID: "demo"},
+		Files: []bundle.FileEntry{{Path: "../escape.txt", Data: []byte("x"), Hash: bundle.HashBytes([]byte("x"))}},
+	}
+	data, err := encodeBundle(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeBundle(data); err == nil {
+		t.Fatal("expected decodeBundle to reject an unsafe file path")
+	}
+}

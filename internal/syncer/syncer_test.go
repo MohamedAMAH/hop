@@ -375,6 +375,34 @@ func TestPullMergesArtifactsByKind(t *testing.T) {
 	}
 }
 
+func TestPullReportsFilesWritten(t *testing.T) {
+	// Source machine pushes a sidecar + a memory file.
+	src, srcRoot := baseDeps(t)
+	localDirtySession(t, src, srcRoot)
+	if err := claude.New().WriteArtifact(src.Home, srcRoot,
+		agent.Artifact{RelPath: "s1/tool-results/x.txt", Data: []byte("payload")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := claude.New().WriteArtifact(src.Home, srcRoot,
+		agent.Artifact{RelPath: "memory/MEMORY.md", Data: []byte("v-new"), ModTime: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(src, "hop", "2026-07-16T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Destination machine shares the transport and pulls both artifacts fresh.
+	dst, _ := baseDeps(t)
+	dst.Transport = src.Transport
+	rep, err := Pull(dst, "hop", "2026-07-16T00:01:00Z", AbortResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Files != 2 {
+		t.Fatalf("expected 2 files written, got %d (report: %+v)", rep.Files, rep)
+	}
+}
+
 func TestPullRejectsUnsafeArtifactPath(t *testing.T) {
 	dst, _ := baseDeps(t)
 	dst.Transport.Send(&bundle.Bundle{

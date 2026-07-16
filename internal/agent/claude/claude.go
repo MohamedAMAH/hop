@@ -217,6 +217,12 @@ func (c Claude) WriteArtifact(home, projectRoot string, a agent.Artifact) error 
 		os.Remove(tmpName)
 		return err
 	}
+	if a.ModTime != 0 {
+		t := time.Unix(0, a.ModTime)
+		if err := os.Chtimes(dest, t, t); err != nil {
+			return fmt.Errorf("hop: set mod time on %s: %w", a.RelPath, err)
+		}
+	}
 	return nil
 }
 

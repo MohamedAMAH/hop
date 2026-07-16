@@ -234,6 +234,7 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 	}
 
 	storeDir := d.Agent.ProjectDir(d.Home, root)
+	fileWrites := 0
 	for _, f := range b.Files {
 		if err := safeArtifactPath(f.Path); err != nil {
 			return Report{}, err
@@ -253,6 +254,7 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 		if err := d.Agent.WriteArtifact(d.Home, root, agent.Artifact{RelPath: f.Path, Data: data, ModTime: f.ModTime}); err != nil {
 			return Report{}, err
 		}
+		fileWrites++
 	}
 
 	// Claim the baton locally and record this sync.
@@ -270,7 +272,7 @@ func Pull(d Deps, projectID, now string, r Resolver) (Report, error) {
 	if err := st.Save(d.statePath(projectID)); err != nil {
 		return Report{}, err
 	}
-	return Report{ProjectID: projectID, Sessions: written, Sequence: b.Meta.Baton.Sequence}, nil
+	return Report{ProjectID: projectID, Sessions: written, Files: fileWrites, Sequence: b.Meta.Baton.Sequence}, nil
 }
 
 /* snapshot builds a state snapshot of every session's size and hash. */

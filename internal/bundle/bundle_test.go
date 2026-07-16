@@ -28,3 +28,18 @@ func TestHashBytesIsStable(t *testing.T) {
 		t.Fatal("hash collision on different input")
 	}
 }
+
+func TestValidFilePath(t *testing.T) {
+	bad := []string{"../x", "a/../../b", "/abs", `C:\x`, ".."}
+	for _, p := range bad {
+		if err := ValidFilePath(p); err == nil {
+			t.Fatalf("expected %q to be rejected", p)
+		}
+	}
+	good := []string{"memory/MEMORY.md", "s1/subagents/a.jsonl"}
+	for _, p := range good {
+		if err := ValidFilePath(p); err != nil {
+			t.Fatalf("expected %q to be allowed, got %v", p, err)
+		}
+	}
+}

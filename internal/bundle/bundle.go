@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path"
 	"strings"
 
 	"hop/internal/agent"
@@ -71,6 +72,36 @@ type FileEntry struct {
 func HashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+/*
+ValidFilePath rejects a bundle file path that is not a clean, relative,
+in-tree path: absolute paths, drive-letter prefixes, any ".." segment, and
+paths that do not survive path.Clean unchanged are refused so a bundle can
+never write outside the project store.
+*/
+func ValidFilePath(p string) error {
+	if p == "" {
+		return fmt.Errorf("hop: empty artifact path")
+	}
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
+		return fmt.Errorf("hop: absolute artifact path %q", p)
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		return fmt.Errorf("hop: drive-letter artifact path %q", p)
+	}
+	if strings.Contains(p, `\`) {
+		return fmt.Errorf("hop: backslash in artifact path %q", p)
+	}
+	if p != path.Clean(p) {
+		return fmt.Errorf("hop: unclean artifact path %q", p)
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return fmt.Errorf("hop: traversal in artifact path %q", p)
+		}
+	}
+	return nil
 }
 
 /*
